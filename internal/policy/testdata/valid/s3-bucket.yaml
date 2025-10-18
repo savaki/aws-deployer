@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template with unauthorized S3 bucket - should fail policy
+
+Resources:
+  MyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: file-processor
+      Runtime: python3.9
+      Handler: index.handler
+      Code:
+        ZipFile: >-
+          def handler(event, context): 
+            return {'statusCode': 200}
+      Role: !GetAtt LambdaRole.Arn
+
+  StorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: my-storage-bucket
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole

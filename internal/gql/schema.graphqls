@@ -1,0 +1,162 @@
+"""
+Custom scalar for date-time values in ISO 8601 format
+"""
+scalar DateTime
+
+"""
+Build status enum representing the current state of a build
+"""
+enum BuildStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  FAILED
+}
+
+"""
+Deployment error from a multi-account deployment
+"""
+type DeploymentError {
+  """AWS Account ID"""
+  accountId: String!
+
+  """AWS Region"""
+  region: String!
+
+  """CloudFormation status reason"""
+  statusReason: String
+
+  """Recent failed stack events"""
+  stackEvents: [String!]!
+}
+
+"""
+Target represents account IDs and regions for deployment
+"""
+type Target {
+  """List of AWS Account IDs"""
+  accountIds: [String!]!
+
+  """List of AWS Regions"""
+  regions: [String!]!
+}
+
+"""
+DeploymentTargets represents deployment configuration for a specific environment
+"""
+type DeploymentTargets {
+  """Repository name (or '$' for default)"""
+  repo: String!
+
+  """Environment name"""
+  env: String!
+
+  """List of deployment targets"""
+  targets: [Target!]!
+
+  """Downstream environments for promotion"""
+  downstreamEnvs: [String!]!
+}
+
+"""
+PipelineConfig represents the promotion structure for a repository
+"""
+type PipelineConfig {
+  """Repository name (or '$' for default)"""
+  repo: String!
+
+  """Initial environment"""
+  initialEnv: String!
+
+  """All environment configurations in this pipeline"""
+  environments: [DeploymentTargets!]!
+}
+
+"""
+Build represents a deployment build
+"""
+type Build {
+  """Unique build ID in format: {repo}/{env}:{ksuid}"""
+  id: ID!
+
+  """Repository name"""
+  repo: String!
+
+  """Environment name (dev, staging, prod)"""
+  env: String!
+
+  """Build number from version"""
+  buildNumber: String!
+
+  """Git branch"""
+  branch: String!
+
+  """Version string"""
+  version: String!
+
+  """Git commit hash"""
+  commitHash: String!
+
+  """Current build status"""
+  status: BuildStatus!
+
+  """CloudFormation stack name"""
+  stackName: String!
+
+  """Step Functions execution ARN"""
+  executionArn: String
+
+  """Downstream environments configured for promotion"""
+  downstreamEnvs: [String!]!
+
+  """Timestamp when build started"""
+  startTime: DateTime!
+
+  """Timestamp when build ended (if completed)"""
+  endTime: DateTime
+
+  """Error message (if failed)"""
+  errorMsg: String
+
+  """Deployment errors from multi-account deployments"""
+  deploymentErrors: [DeploymentError!]!
+}
+
+type Query {
+  """
+  List recent builds for a given environment
+  """
+  builds(env: String!): [Build!]!
+
+  """
+  List all builds for a specific repository and environment
+  """
+  buildsByRepo(repo: String!, env: String!): [Build!]!
+
+  """
+  Get all pipeline configurations (default and per-repo)
+  """
+  pipelines: [PipelineConfig!]!
+
+  """
+  Simple health check that returns "ok"
+  """
+  ok: String!
+}
+
+type Mutation {
+  """
+  Redeploy a specific version
+  """
+  redeploy(buildId: ID!): Query!
+
+  """
+  Promote a build to downstream environments
+  """
+  promote(buildId: ID!): Query!
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+}

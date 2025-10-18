@@ -1,0 +1,325 @@
+{
+  "Comment": "Multi-account CloudFormation deployment workflow with StackSets",
+  "StartAt": "AcquireLock",
+  "States": {
+    "AcquireLock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-acquire-lock",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk",
+          "execution_arn.$": "$$.Execution.Id",
+          "retry_count.$": "States.JsonToString($.retry_count)"
+        }
+      },
+      "ResultPath": "$.lockResult",
+      "Next": "CheckLockAcquired",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "HandleFailure",
+        "ResultPath": "$.error"
+      }]
+    },
+    "CheckLockAcquired": {
+      "Type": "Choice",
+      "Choices": [{
+        "Variable": "$.lockResult.Payload.lock_acquired",
+        "BooleanEquals": true,
+        "Next": "FetchTargets"
+      }, {
+        "Variable": "$.lockResult.Payload.should_retry",
+        "BooleanEquals": true,
+        "Next": "WaitForLock"
+      }],
+      "Default": "LockTimeout"
+    },
+    "WaitForLock": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "UpdateRetryCount"
+    },
+    "UpdateRetryCount": {
+      "Type": "Pass",
+      "Parameters": {
+        "env.$": "$.env",
+        "repo.$": "$.repo",
+        "sk.$": "$.sk",
+        "s3_bucket.$": "$.s3_bucket",
+        "s3_key.$": "$.s3_key",
+        "version.$": "$.version",
+        "commit_hash.$": "$.commit_hash",
+        "retry_count.$": "$.lockResult.Payload.retry_count"
+      },
+      "Next": "AcquireLock"
+    },
+    "LockTimeout": {
+      "Type": "Fail",
+      "Error": "LockTimeout",
+      "Cause": "Failed to acquire deployment lock after maximum retries"
+    },
+    "FetchTargets": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-fetch-targets",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk"
+        }
+      },
+      "ResultPath": "$.targetsResult",
+      "Next": "InitializeDeployments",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "ReleaseLockOnError",
+        "ResultPath": "$.error"
+      }]
+    },
+    "InitializeDeployments": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-initialize-deployments",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk",
+          "targets.$": "$.targetsResult.Payload.targets"
+        }
+      },
+      "ResultPath": "$.initResult",
+      "Next": "CreateOrUpdateStackSet",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "ReleaseLockOnError",
+        "ResultPath": "$.error"
+      }]
+    },
+    "CreateOrUpdateStackSet": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-create-stackset",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk",
+          "s3_bucket.$": "$.s3_bucket",
+          "s3_key.$": "$.s3_key"
+        }
+      },
+      "ResultPath": "$.stackSetResult",
+      "Next": "DeployStackInstances",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "ReleaseLockOnError",
+        "ResultPath": "$.error"
+      }]
+    },
+    "DeployStackInstances": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-deploy-stack-instances",
+        "Payload": {
+          "stack_set_name.$": "$.stackSetResult.Payload.stack_set_name",
+          "targets.$": "$.targetsResult.Payload.targets"
+        }
+      },
+      "ResultPath": "$.deployResult",
+      "Next": "WaitForStackSet",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "CheckIfOperationInProgress",
+        "ResultPath": "$.deployError"
+      }]
+    },
+    "CheckIfOperationInProgress": {
+      "Type": "Choice",
+      "Comment": "Check if error is OperationInProgressException",
+      "Choices": [{
+        "Variable": "$.deployError.Cause",
+        "StringMatches": "*OperationInProgressException*",
+        "Next": "WaitForOperation"
+      }],
+      "Default": "TransformDeployError"
+    },
+    "WaitForOperation": {
+      "Type": "Wait",
+      "Comment": "Wait 15 seconds for in-progress operation to complete",
+      "Seconds": 15,
+      "Next": "DeployStackInstances"
+    },
+    "TransformDeployError": {
+      "Type": "Pass",
+      "Comment": "Transform deploy error to standard error format",
+      "Parameters": {
+        "env.$": "$.env",
+        "repo.$": "$.repo",
+        "sk.$": "$.sk",
+        "error.$": "$.deployError"
+      },
+      "Next": "ReleaseLockOnError"
+    },
+    "WaitForStackSet": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckStackSetStatus"
+    },
+    "CheckStackSetStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-check-stackset-status",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "stack_set_name.$": "$.stackSetResult.Payload.stack_set_name",
+          "operation_id.$": "$.deployResult.Payload.operation_id",
+          "targets.$": "$.targetsResult.Payload.targets"
+        }
+      },
+      "ResultPath": "$.statusResult",
+      "Next": "CheckOperationComplete",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "ReleaseLockOnError",
+        "ResultPath": "$.error"
+      }]
+    },
+    "CheckOperationComplete": {
+      "Type": "Choice",
+      "Choices": [{
+        "Variable": "$.statusResult.Payload.is_complete",
+        "BooleanEquals": true,
+        "Next": "AggregateResults"
+      }],
+      "Default": "WaitForStackSet"
+    },
+    "AggregateResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-aggregate-results",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk"
+        }
+      },
+      "ResultPath": "$.aggregateResult",
+      "Next": "CheckBuildStatus",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "ReleaseLockOnError",
+        "ResultPath": "$.error"
+      }]
+    },
+    "CheckBuildStatus": {
+      "Type": "Choice",
+      "Choices": [{
+        "Variable": "$.aggregateResult.Payload.build_status",
+        "StringEquals": "SUCCESS",
+        "Next": "ReleaseLock"
+      }],
+      "Default": "ReleaseLockOnFailure"
+    },
+    "ReleaseLock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-release-lock",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk"
+        }
+      },
+      "ResultPath": "$.releaseLockResult",
+      "Next": "Success"
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "ReleaseLockOnFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-release-lock",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk"
+        }
+      },
+      "ResultPath": "$.releaseLockResult",
+      "Next": "UpdateBuildStatusOnFailure"
+    },
+    "UpdateBuildStatusOnFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-update-build-status",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk",
+          "status": "FAILED"
+        }
+      },
+      "ResultPath": "$.updateStatusResult",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "HandleFailure"
+      }],
+      "Next": "HandleFailure"
+    },
+    "ReleaseLockOnError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-release-lock",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk"
+        }
+      },
+      "ResultPath": "$.releaseLockResult",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "UpdateBuildStatusOnError"
+      }],
+      "Next": "UpdateBuildStatusOnError"
+    },
+    "UpdateBuildStatusOnError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-update-build-status",
+        "Payload": {
+          "env.$": "$.env",
+          "repo.$": "$.repo",
+          "sk.$": "$.sk",
+          "status": "FAILED",
+          "error_msg.$": "$.error.Cause"
+        }
+      },
+      "ResultPath": "$.updateStatusResult",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "HandleFailure"
+      }],
+      "Next": "HandleFailure"
+    },
+    "HandleFailure": {
+      "Type": "Fail",
+      "Error": "DeploymentFailed",
+      "Cause": "Multi-account deployment failed"
+    }
+  }
+}

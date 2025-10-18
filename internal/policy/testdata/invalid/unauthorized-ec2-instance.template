@@ -1,0 +1,42 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Template with unauthorized EC2 instance - should fail policy",
+  "Resources": {
+    "MyFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "compute-function",
+        "Runtime": "python3.9",
+        "Handler": "index.handler",
+        "Code": {
+          "ZipFile": "def handler(event, context): return {'statusCode': 200}"
+        },
+        "Role": { "Fn::GetAtt": [ "LambdaRole", "Arn" ] }
+      }
+    },
+    "ComputeInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": "t3.micro",
+        "ImageId": "ami-0abcdef1234567890"
+      }
+    },
+    "LambdaRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

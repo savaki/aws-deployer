@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template with DynamoDB table missing TableName property - should fail policy
+
+Resources:
+  DataFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: data-handler
+      Runtime: python3.9
+      Handler: index.handler
+      Code:
+        ZipFile: >-
+          def handler(event, context): 
+            return {'statusCode': 200}
+      Role: !GetAtt DataRole.Arn
+
+  DataUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref DataFunction
+      AuthType: AWS_IAM
+
+  DataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  DataRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole

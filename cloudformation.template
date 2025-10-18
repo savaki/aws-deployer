@@ -1,0 +1,1332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Deployer - CloudFormation deployment automation using Step Functions'
+
+Parameters:
+  Env:
+    Type: String
+    Default: dev
+    Description: Environment name (dev, staging, prod)
+
+  S3BucketName:
+    Type: String
+    Default: lmvtfy-github-artifacts
+    Description: S3 bucket name for GitHub artifacts
+
+  Version:
+    Type: String
+    Description: Version string for deployment packages (e.g., 20240102-1430)
+
+  ZoneId:
+    Type: String
+    Default: ''
+    Description: Route53 Hosted Zone ID (optional, required for custom domain)
+
+  DomainName:
+    Type: String
+    Default: ''
+    Description: Custom domain name for API Gateway (optional)
+
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for custom domain (optional)
+
+  AllowedEmail:
+    Type: String
+    Default: ''
+    Description: Email address allowed to access the console (optional, if empty all authenticated users are allowed)
+
+  RotationScheduleDays:
+    Type: Number
+    Default: 1
+    Description: Number of days between automatic session token rotations
+
+  DeploymentMode:
+    Type: String
+    Default: single
+    AllowedValues:
+      - single
+      - multi
+    Description: Deployment mode (single-account or multi-account)
+
+Conditions:
+  HasCustomDomain: !And
+    - !Not [ !Equals [ !Ref ZoneId, '' ] ]
+    - !Not [ !Equals [ !Ref DomainName, '' ] ]
+    - !Not [ !Equals [ !Ref CertificateArn, '' ] ]
+
+  IsMultiAccount: !Equals [ !Ref DeploymentMode, multi ]
+  IsSingleAccount: !Equals [ !Ref DeploymentMode, single ]
+
+Resources:
+  # DynamoDB Table for tracking builds
+  BuildsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Env}-aws-deployer--builds'
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # DynamoDB Table for deployment targets (multi-account only)
+  TargetsTable:
+    Type: AWS::DynamoDB::Table
+    Condition: IsMultiAccount
+    Properties:
+      TableName: !Sub '${Env}-aws-deployer--targets'
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # DynamoDB Table for tracking per-account/region deployments (multi-account only)
+  DeploymentsTable:
+    Type: AWS::DynamoDB::Table
+    Condition: IsMultiAccount
+    Properties:
+      TableName: !Sub '${Env}-aws-deployer--deployments'
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # DynamoDB Table for deployment locks (multi-account only)
+  LocksTable:
+    Type: AWS::DynamoDB::Table
+    Condition: IsMultiAccount
+    Properties:
+      TableName: !Sub '${Env}-aws-deployer--locks'
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # IAM Role for Lambda functions (S3 trigger)
+  LambdaServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource: !GetAtt BuildsTable.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:aws-deployer/${Env}/secrets-*'
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:aws-deployer/${Env}/session-token-*'
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Env}-aws-deployer-deployment'
+                  - !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Env}-aws-deployer-multi-account-deployment'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/*'
+        - !If
+          - IsMultiAccount
+          - PolicyName: MultiAccountTablesAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:Scan
+                    - dynamodb:Query
+                    - dynamodb:GetItem
+                  Resource:
+                    - !GetAtt TargetsTable.Arn
+                    - !GetAtt DeploymentsTable.Arn
+          - !Ref AWS::NoValue
+
+  # IAM Role for Trigger Build Lambda (DynamoDB stream trigger)
+  TriggerBuildLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-trigger-build-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: TriggerBuildExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:DescribeStream
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:ListStreams
+                Resource:
+                  - !GetAtt BuildsTable.Arn
+                  - !Sub '${BuildsTable.Arn}/stream/*'
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Env}-aws-deployer-deployment'
+                  - !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${Env}-aws-deployer-multi-account-deployment'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/*'
+        - !If
+          - IsMultiAccount
+          - PolicyName: MultiAccountTablesAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:GetItem
+                    - dynamodb:Query
+                  Resource:
+                    - !GetAtt TargetsTable.Arn
+          - !Ref AWS::NoValue
+
+  # IAM Role for CloudFormation Deployment Lambda (Admin Access)
+  CloudFormationDeployerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-cloudformation-deployer-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource: !GetAtt BuildsTable.Arn
+
+  # IAM Role for Step Functions
+  StepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-stepfunction-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Env}-aws-deployer-*'
+
+  # IAM Role for Secrets Manager Rotator Lambda
+  RotatorLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-rotator-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerRotationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecretVersionStage
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:aws-deployer/${Env}/session-token-*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetRandomPassword
+                Resource: '*'
+
+  # IAM Role for StackSet Administration (multi-account only)
+  StackSetAdministrationRole:
+    Type: AWS::IAM::Role
+    Condition: IsMultiAccount
+    Properties:
+      RoleName: AWSCloudFormationStackSetAdministrationRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StackSetAdministrationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: 'arn:aws:iam::*:role/AWSCloudFormationStackSetExecutionRole'
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # IAM Role for Multi-Account Lambda Functions (multi-account only)
+  MultiAccountLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: IsMultiAccount
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-multi-account-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: MultiAccountLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt BuildsTable.Arn
+                  - !GetAtt TargetsTable.Arn
+                  - !GetAtt DeploymentsTable.Arn
+                  - !GetAtt LocksTable.Arn
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStackSet
+                  - cloudformation:UpdateStackSet
+                  - cloudformation:DescribeStackSet
+                  - cloudformation:CreateStackInstances
+                  - cloudformation:UpdateStackInstances
+                  - cloudformation:DescribeStackInstance
+                  - cloudformation:DescribeStackSetOperation
+                  - cloudformation:ListStackInstances
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:TagResource
+                  - cloudformation:UntagResource
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt StackSetAdministrationRole.Arn
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/*'
+
+  # Session Token Secret
+  # NOTE: No initial secret - rotator will create it on first rotation
+  SessionTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'aws-deployer/${Env}/session-token'
+      Description: Auto-rotating session token secret (stores most recent 3 versions)
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # SSM Parameters for application configuration
+  StateMachineArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/state-machine-arn'
+      Type: String
+      Value: !Ref DeploymentStateMachine
+      Description: ARN of the single-account deployment state machine
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  MultiAccountStateMachineArnParameter:
+    Type: AWS::SSM::Parameter
+    Condition: IsMultiAccount
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/multi-account-state-machine-arn'
+      Type: String
+      Value: !Ref MultiAccountDeploymentStateMachine
+      Description: ARN of the multi-account deployment state machine
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  DeploymentModeParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/deployment-mode'
+      Type: String
+      Value: !Ref DeploymentMode
+      Description: Deployment mode (single or multi)
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  S3BucketParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/s3-bucket'
+      Type: String
+      Value: !Ref S3BucketName
+      Description: S3 bucket name for GitHub artifacts
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  AllowedEmailParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/allowed-email'
+      Type: String
+      Value: !Ref AllowedEmail
+      Description: Email address allowed to access the console
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  SessionTokenSecretNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/session-token-secret-name'
+      Type: String
+      Value: !Sub 'aws-deployer/${Env}/session-token'
+      Description: Secrets Manager secret name for session tokens
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  CustomDomainParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasCustomDomain
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/custom-domain'
+      Type: String
+      Value: !Ref DomainName
+      Description: Custom domain name for API Gateway
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  ApiGatewayIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Env}/aws-deployer/api-gateway-id'
+      Type: String
+      Value: !Ref ServerAPI
+      Description: API Gateway ID for the server
+      Tags:
+        Environment: !Ref Env
+        ManagedBy: aws-deployer
+
+  # Lambda Functions
+  S3TriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-s3-trigger'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/s3-trigger.zip'
+      Role: !GetAtt LambdaServiceRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  TriggerBuildFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-trigger-build'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/trigger-build.zip'
+      Role: !GetAtt TriggerBuildLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  DeployCloudFormationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-deploy-cloudformation'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/deploy-cloudformation.zip'
+      Role: !GetAtt CloudFormationDeployerRole.Arn
+      Timeout: 300
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  CheckStackStatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-check-stack-status'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/check-stack-status.zip'
+      Role: !GetAtt LambdaServiceRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  UpdateBuildStatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-update-build-status'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/update-build-status.zip'
+      Role: !GetAtt LambdaServiceRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  ServerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-server'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/server.zip'
+      Role: !GetAtt LambdaServiceRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  RotatorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-rotator'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/rotator.zip'
+      Role: !GetAtt RotatorLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SessionTokenSecret
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # Multi-Account Lambda Functions (conditional on IsMultiAccount)
+
+  AcquireLockFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-acquire-lock'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/acquire-lock.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  FetchTargetsFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-fetch-targets'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/fetch-targets.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  InitializeDeploymentsFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-initialize-deployments'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/initialize-deployments.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  CreateStackSetFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-create-stackset'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/create-stackset.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 300
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+          ADMINISTRATION_ROLE_ARN: !GetAtt StackSetAdministrationRole.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  DeployStackInstancesFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-deploy-stack-instances'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/deploy-stack-instances.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 300
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  CheckStackSetStatusFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-check-stackset-status'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/check-stackset-status.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  AggregateResultsFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-aggregate-results'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/aggregate-results.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  ReleaseLockFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-release-lock'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/release-lock.zip'
+      Role: !GetAtt MultiAccountLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+
+  # Lambda Permission for Secrets Manager to invoke rotator
+  RotatorFunctionSecretsManagerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RotatorFunction
+      Action: lambda:InvokeFunction
+      Principal: secretsmanager.amazonaws.com
+
+  # Rotation Schedule for Session Token
+  SessionTokenRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn: RotatorFunctionSecretsManagerPermission
+    Properties:
+      SecretId: !Ref SessionTokenSecret
+      RotationLambdaARN: !GetAtt RotatorFunction.Arn
+      RotationRules:
+        AutomaticallyAfterDays: !Ref RotationScheduleDays
+
+  # HTTP API Gateway
+  ServerAPI:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${Env}-aws-deployer-api'
+      Description: HTTP API Gateway for AWS Deployer management console
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - OPTIONS
+        AllowHeaders:
+          - '*'
+
+  # Lambda Integration
+  ServerAPIIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ServerAPI
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ServerFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  # Default Route - proxies all requests to Lambda
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ServerAPI
+      RouteKey: '$default'
+      Target: !Sub 'integrations/${ServerAPIIntegration}'
+
+  # Stage (with auto-deploy)
+  ServerAPIStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ServerAPI
+      StageName: !Ref Env
+      Description: !Sub '${Env} stage'
+      AutoDeploy: true
+
+  # Lambda Permission for API Gateway
+  ServerFunctionAPIPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ServerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ServerAPI}/*'
+
+  # Custom Domain Name for HTTP API Gateway (conditional)
+  ServerAPICustomDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref DomainName
+      DomainNameConfigurations:
+        - CertificateArn: !Ref CertificateArn
+          EndpointType: REGIONAL
+
+  # API Mapping for Custom Domain (conditional)
+  ServerAPIMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Condition: HasCustomDomain
+    Properties:
+      ApiId: !Ref ServerAPI
+      DomainName: !Ref ServerAPICustomDomain
+      Stage: !Ref ServerAPIStage
+
+  # Route53 Record for Custom Domain (conditional)
+  ServerAPIRoute53Record:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref ZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ServerAPICustomDomain.RegionalDomainName
+        HostedZoneId: !GetAtt ServerAPICustomDomain.RegionalHostedZoneId
+        EvaluateTargetHealth: false
+
+  # Step Functions State Machine
+  DeploymentStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${Env}-aws-deployer-deployment'
+      RoleArn: !GetAtt StepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "CloudFormation deployment workflow",
+          "StartAt": "DeployCloudFormation",
+          "States": {
+            "DeployCloudFormation": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${Env}-aws-deployer-deploy-cloudformation",
+                "Payload.$": "$"
+              },
+              "ResultPath": "$.deployResult",
+              "Next": "WaitForStackCompletion",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"],
+                  "Next": "HandleFailure",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "WaitForStackCompletion": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${Env}-aws-deployer-check-stack-status",
+                "Payload.$": "$"
+              },
+              "ResultPath": "$.stackStatus",
+              "Next": "CheckStackStatus",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"],
+                  "Next": "HandleFailure",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "CheckStackStatus": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.stackStatus.Payload.status",
+                  "StringEquals": "CREATE_COMPLETE",
+                  "Next": "HandleSuccess"
+                },
+                {
+                  "Variable": "$.stackStatus.Payload.status",
+                  "StringEquals": "UPDATE_COMPLETE",
+                  "Next": "HandleSuccess"
+                },
+                {
+                  "Variable": "$.stackStatus.Payload.status",
+                  "StringMatches": "*_FAILED",
+                  "Next": "HandleFailure"
+                },
+                {
+                  "Variable": "$.stackStatus.Payload.status",
+                  "StringMatches": "*_ROLLBACK_*",
+                  "Next": "HandleFailure"
+                }
+              ],
+              "Default": "WaitAndRetry"
+            },
+            "WaitAndRetry": {
+              "Type": "Wait",
+              "Seconds": 15,
+              "Next": "WaitForStackCompletion"
+            },
+            "HandleSuccess": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${Env}-aws-deployer-update-build-status",
+                "Payload": {
+                  "env.$": "$.env",
+                  "repo.$": "$.repo",
+                  "sk.$": "$.sk",
+                  "status": "SUCCESS"
+                }
+              },
+              "End": true
+            },
+            "HandleFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${Env}-aws-deployer-update-build-status",
+                "Payload": {
+                  "env.$": "$.env",
+                  "errorMsg.$": "$.error.Cause",
+                  "repo.$": "$.repo",
+                  "sk.$": "$.sk",
+                  "status": "FAILED"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # Multi-Account Deployment State Machine (conditional on IsMultiAccount)
+  MultiAccountDeploymentStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Condition: IsMultiAccount
+    Properties:
+      StateMachineName: !Sub '${Env}-aws-deployer-multi-account-deployment'
+      RoleArn: !GetAtt StepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Multi-account CloudFormation deployment workflow with StackSets",
+          "StartAt": "AcquireLock",
+          "States": {
+            "AcquireLock": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${Env}-aws-deployer-acquire-lock",
+                "Payload": {
+                  "env.$": "$.env",
+                  "repo.$": "$.repo",
+                  "sk.$": "$.sk",
+                  "execution_arn.$": "$$.Execution.Id",
+                  "retry_count": 0
+                }
+              },
+              "ResultPath": "$.lockResult",
+              "Next": "CheckLockAcquired",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "HandleFailure", "ResultPath": "$.error"}]
+            },
+            "CheckLockAcquired": {
+              "Type": "Choice",
+              "Choices": [
+                {"Variable": "$.lockResult.Payload.lock_acquired", "BooleanEquals": true, "Next": "FetchTargets"},
+                {"Variable": "$.lockResult.Payload.should_retry", "BooleanEquals": true, "Next": "WaitForLock"}
+              ],
+              "Default": "LockTimeout"
+            },
+            "WaitForLock": {"Type": "Wait", "Seconds": 15, "Next": "UpdateRetryCount"},
+            "UpdateRetryCount": {
+              "Type": "Pass",
+              "Parameters": {
+                "env.$": "$.env",
+                "repo.$": "$.repo",
+                "sk.$": "$.sk",
+                "s3_bucket.$": "$.s3_bucket",
+                "s3_key.$": "$.s3_key",
+                "version.$": "$.version",
+                "commit_hash.$": "$.commit_hash",
+                "retry_count.$": "$.lockResult.Payload.retry_count"
+              },
+              "Next": "AcquireLock"
+            },
+            "LockTimeout": {"Type": "Fail", "Error": "LockTimeout", "Cause": "Failed to acquire deployment lock after maximum retries"},
+            "FetchTargets": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-fetch-targets", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk"}},
+              "ResultPath": "$.targetsResult",
+              "Next": "InitializeDeployments",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
+            },
+            "InitializeDeployments": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-initialize-deployments", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk", "targets.$": "$.targetsResult.Payload.targets"}},
+              "ResultPath": "$.initResult",
+              "Next": "CreateOrUpdateStackSet",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
+            },
+            "CreateOrUpdateStackSet": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-create-stackset", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk", "s3_bucket.$": "$.s3_bucket", "s3_key.$": "$.s3_key"}},
+              "ResultPath": "$.stackSetResult",
+              "Next": "DeployStackInstances",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
+            },
+            "DeployStackInstances": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-deploy-stack-instances", "Payload": {"stack_set_name.$": "$.stackSetResult.Payload.stack_set_name", "targets.$": "$.targetsResult.Payload.targets"}},
+              "ResultPath": "$.deployResult",
+              "Next": "WaitForStackSet",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "CheckIfOperationInProgress", "ResultPath": "$.deployError"}]
+            },
+            "CheckIfOperationInProgress": {
+              "Type": "Choice",
+              "Comment": "Check if error is OperationInProgressException",
+              "Choices": [{"Variable": "$.deployError.Cause", "StringMatches": "*OperationInProgressException*", "Next": "WaitForOperation"}],
+              "Default": "TransformDeployError"
+            },
+            "WaitForOperation": {
+              "Type": "Wait",
+              "Comment": "Wait 15 seconds for in-progress operation to complete",
+              "Seconds": 15,
+              "Next": "DeployStackInstances"
+            },
+            "TransformDeployError": {
+              "Type": "Pass",
+              "Comment": "Transform deploy error to standard error format",
+              "Parameters": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk", "error.$": "$.deployError"},
+              "Next": "ReleaseLockOnError"
+            },
+            "WaitForStackSet": {"Type": "Wait", "Seconds": 15, "Next": "CheckStackSetStatus"},
+            "CheckStackSetStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-check-stackset-status", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "stack_set_name.$": "$.stackSetResult.Payload.stack_set_name", "operation_id.$": "$.deployResult.Payload.operation_id", "targets.$": "$.targetsResult.Payload.targets"}},
+              "ResultPath": "$.statusResult",
+              "Next": "CheckOperationComplete",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
+            },
+            "CheckOperationComplete": {
+              "Type": "Choice",
+              "Choices": [{"Variable": "$.statusResult.Payload.is_complete", "BooleanEquals": true, "Next": "AggregateResults"}],
+              "Default": "WaitForStackSet"
+            },
+            "AggregateResults": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-aggregate-results", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk"}},
+              "ResultPath": "$.aggregateResult",
+              "Next": "CheckBuildStatus",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
+            },
+            "CheckBuildStatus": {
+              "Type": "Choice",
+              "Choices": [{"Variable": "$.aggregateResult.Payload.build_status", "StringEquals": "SUCCESS", "Next": "ReleaseLock"}],
+              "Default": "ReleaseLockOnFailure"
+            },
+            "ReleaseLock": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-release-lock", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk"}},
+              "ResultPath": "$.releaseLockResult",
+              "Next": "Success"
+            },
+            "Success": {"Type": "Succeed"},
+            "ReleaseLockOnFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-release-lock", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk"}},
+              "ResultPath": "$.releaseLockResult",
+              "Next": "UpdateBuildStatusOnFailure"
+            },
+            "UpdateBuildStatusOnFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-update-build-status", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk", "status": "FAILED"}},
+              "ResultPath": "$.updateStatusResult",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "HandleFailure"}],
+              "Next": "HandleFailure"
+            },
+            "ReleaseLockOnError": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-release-lock", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk"}},
+              "ResultPath": "$.releaseLockResult",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "UpdateBuildStatusOnError"}],
+              "Next": "UpdateBuildStatusOnError"
+            },
+            "UpdateBuildStatusOnError": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Env}-aws-deployer-update-build-status", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk", "status": "FAILED", "error_msg.$": "$.error.Cause"}},
+              "ResultPath": "$.updateStatusResult",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "HandleFailure"}],
+              "Next": "HandleFailure"
+            },
+            "HandleFailure": {"Type": "Fail", "Error": "DeploymentFailed", "Cause": "Multi-account deployment failed"}
+          }
+        }
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  # Note: S3 bucket notification must be configured manually or via a separate stack
+  # since the bucket already exists. This can be done via AWS CLI after deployment:
+  # aws s3api put-bucket-notification-configuration --bucket <bucket-name> --notification-configuration file://notification.json
+
+  # Lambda Permission for S3 to invoke the trigger function
+  S3InvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref S3TriggerFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub 'arn:aws:s3:::${S3BucketName}'
+
+  # DynamoDB Stream Event Source Mapping for Trigger Build Function
+  TriggerBuildEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt BuildsTable.StreamArn
+      FunctionName: !Ref TriggerBuildFunction
+      StartingPosition: LATEST
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 0
+      MaximumRecordAgeInSeconds: 604800
+      MaximumRetryAttempts: 3
+      BisectBatchOnFunctionError: true
+      ParallelizationFactor: 1
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the deployment state machine
+    Value: !Ref DeploymentStateMachine
+    Export:
+      Name: !Sub '${Env}-aws-deployer-state-machine-arn'
+
+  DynamoDBTableName:
+    Description: Name of the DynamoDB table for tracking builds
+    Value: !Ref BuildsTable
+    Export:
+      Name: !Sub '${Env}-aws-deployer-dynamodb-table'
+
+  S3TriggerFunctionName:
+    Description: Name of the S3 trigger Lambda function
+    Value: !Ref S3TriggerFunction
+    Export:
+      Name: !Sub '${Env}-aws-deployer-s3-trigger-function'
+
+  APIGatewayURL:
+    Description: URL of the API Gateway endpoint
+    Value: !Sub 'https://${ServerAPI}.execute-api.${AWS::Region}.amazonaws.com/${Env}'
+    Export:
+      Name: !Sub '${Env}-aws-deployer-api-url'
+
+  CustomDomainURL:
+    Condition: HasCustomDomain
+    Description: Custom domain URL for the API
+    Value: !Sub 'https://${DomainName}'

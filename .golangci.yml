@@ -1,0 +1,67 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - gocritic
+    - gofmt
+    - goimports
+    - revive
+    - gosec
+    - misspell
+    - unconvert
+    - unparam
+    - gocyclo
+    - gofumpt
+    - goconst
+    - dupl
+    - lll
+    - nakedret
+    - prealloc
+    - copyloopvar
+    - err113
+    - gocognit
+    - nestif
+    - godox
+    - whitespace
+
+linters-settings:
+  lll:
+    line-length: 120
+  gocyclo:
+    min-complexity: 15
+  gocognit:
+    min-complexity: 30
+  nestif:
+    min-complexity: 5
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+  gosec:
+    exclude-generated: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - dupl
+        - gocyclo
+        - gocognit
+    - path: cmd/
+      linters:
+        - gochecknoinits
+  max-issues-per-linter: 0
+  max-same-issues: 0

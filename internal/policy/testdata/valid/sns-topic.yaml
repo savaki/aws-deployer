@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template with unauthorized SNS topic - should fail policy
+
+Resources:
+  NotificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: notification-handler
+      Runtime: java11
+      Handler: com.example.NotificationHandler::handleRequest
+      Code:
+        ZipFile: placeholder
+      Role: !GetAtt NotificationRole.Arn
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: user-notifications
+      DisplayName: User Notifications
+
+  NotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  SnsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: SnsPublishAccess
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sns:Publish
+            Resource: !Ref NotificationTopic
+      Roles:
+        - !Ref NotificationRole

@@ -1,0 +1,7 @@
+{
+  "repo": "test-repo",
+  "env": "dev",
+  "sk": "2HFj3kLmNoPqRsTuVwXy",
+  "status": "FAILED",
+  "error_msg": "CloudFormation stack creation failed: Resource limit exceeded"
+}

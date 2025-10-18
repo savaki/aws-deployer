@@ -1,0 +1,48 @@
+# ignore intellij
+.idea
+*.iml
+*.ipr
+*.iws
+
+# ignore generated
+*.zip
+.claude/settings.local.json
+.claude/skills
+bootstrap
+build/
+coverage.out
+
+# Version management
+.version
+
+# Go binaries
+bin/
+gin-bin
+
+# Command binaries (Go build outputs matching directory names)
+cmd/aws-deployer/aws-deployer
+
+# Lambda function binaries
+internal/lambda/trigger-build/trigger-build
+internal/lambda/rotator/rotator
+internal/lambda/server/server
+internal/lambda/step-functions/deploy-cloudformation/deploy-cloudformation
+internal/lambda/step-functions/update-build-status/update-build-status
+internal/lambda/step-functions/multi-account/aggregate-results/aggregate-results
+internal/lambda/step-functions/multi-account/create-stackset/create-stackset
+internal/lambda/step-functions/multi-account/deploy-stack-instances/deploy-stack-instances
+
+# Top-level build artifacts
+/server
+/aggregate-results
+/deploy-cloudformation
+/deploy-stack-instances
+
+# Frontend build artifacts (built from frontend/ into docroot/)
+internal/lambda/server/docroot/assets/
+internal/lambda/server/docroot/vite.svg
+
+# Ignore scripts
+*.sh
+
+

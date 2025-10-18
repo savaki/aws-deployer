@@ -1,0 +1,116 @@
+{
+  "Comment": "CloudFormation deployment workflow",
+  "StartAt": "DeployCloudFormation",
+  "States": {
+    "DeployCloudFormation": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${DeployCloudFormationFunction}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.deployResult",
+      "Next": "WaitForStackCompletion",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "HandleFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "WaitForStackCompletion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CheckStackStatusFunction}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.stackStatus",
+      "Next": "CheckStackStatus",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "HandleFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "CheckStackStatus": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.stackStatus.Payload.status",
+          "StringEquals": "CREATE_COMPLETE",
+          "Next": "HandleSuccess"
+        },
+        {
+          "Variable": "$.stackStatus.Payload.status",
+          "StringEquals": "UPDATE_COMPLETE",
+          "Next": "HandleSuccess"
+        },
+        {
+          "Variable": "$.stackStatus.Payload.status",
+          "StringMatches": "*_FAILED",
+          "Next": "PrepareStackFailureError"
+        },
+        {
+          "Variable": "$.stackStatus.Payload.status",
+          "StringMatches": "*_ROLLBACK_*",
+          "Next": "PrepareStackFailureError"
+        }
+      ],
+      "Default": "WaitAndRetry"
+    },
+    "PrepareStackFailureError": {
+      "Type": "Pass",
+      "Parameters": {
+        "repo.$": "$.repo",
+        "env.$": "$.env",
+        "sk.$": "$.sk",
+        "error": {
+          "Cause.$": "States.Format('CloudFormation stack deployment failed with status: {}', $.stackStatus.Payload.status)"
+        }
+      },
+      "Next": "HandleFailure"
+    },
+    "WaitAndRetry": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "WaitForStackCompletion"
+    },
+    "HandleSuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${UpdateBuildStatusFunction}",
+        "Payload": {
+          "repo.$": "$.repo",
+          "env.$": "$.env",
+          "sk.$": "$.sk",
+          "status": "SUCCESS"
+        }
+      },
+      "End": true
+    },
+    "HandleFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${UpdateBuildStatusFunction}",
+        "Payload": {
+          "repo.$": "$.repo",
+          "env.$": "$.env",
+          "sk.$": "$.sk",
+          "status": "FAILED",
+          "error_msg.$": "$.error.Cause"
+        }
+      },
+      "End": true
+    }
+  }
+}

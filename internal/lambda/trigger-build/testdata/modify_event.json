@@ -1,0 +1,93 @@
+{
+  "Records": [
+    {
+      "eventID": "2",
+      "eventName": "MODIFY",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1678886460,
+        "Keys": {
+          "pk": {
+            "S": "test-repo/dev"
+          },
+          "sk": {
+            "S": "2HFj3kLmNoPqRsTuVwXy"
+          }
+        },
+        "NewImage": {
+          "pk": {
+            "S": "test-repo/dev"
+          },
+          "sk": {
+            "S": "2HFj3kLmNoPqRsTuVwXy"
+          },
+          "repo": {
+            "S": "test-repo"
+          },
+          "env": {
+            "S": "dev"
+          },
+          "branch": {
+            "S": "main"
+          },
+          "version": {
+            "S": "1.0.0-build.123"
+          },
+          "commitHash": {
+            "S": "abc123def456789"
+          },
+          "status": {
+            "S": "IN_PROGRESS"
+          },
+          "execution_arn": {
+            "S": "arn:aws:states:us-east-1:123456789012:execution:StateMachine:exec-123"
+          },
+          "created_at": {
+            "N": "1678886400"
+          },
+          "updated_at": {
+            "N": "1678886460"
+          }
+        },
+        "OldImage": {
+          "pk": {
+            "S": "test-repo/dev"
+          },
+          "sk": {
+            "S": "2HFj3kLmNoPqRsTuVwXy"
+          },
+          "repo": {
+            "S": "test-repo"
+          },
+          "env": {
+            "S": "dev"
+          },
+          "branch": {
+            "S": "main"
+          },
+          "version": {
+            "S": "1.0.0-build.123"
+          },
+          "commitHash": {
+            "S": "abc123def456789"
+          },
+          "status": {
+            "S": "PENDING"
+          },
+          "created_at": {
+            "N": "1678886400"
+          },
+          "updated_at": {
+            "N": "1678886400"
+          }
+        },
+        "SequenceNumber": "222",
+        "SizeBytes": 59,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      },
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table/stream/2023-03-15T00:00:00.000"
+    }
+  ]
+}

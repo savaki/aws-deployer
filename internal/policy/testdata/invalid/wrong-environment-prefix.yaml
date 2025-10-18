@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template with wrong environment prefix in DynamoDB table name - should fail policy
+
+Resources:
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: env-test-function
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Code:
+        ZipFile: >-
+          exports.handler = async (event) => { 
+            return { statusCode: 200 }; 
+          };
+      Role: !GetAtt ApiRole.Arn
+
+  ApiUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref ApiFunction
+      AuthType: AWS_IAM
+
+  WrongEnvTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: prod-myapp--users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole

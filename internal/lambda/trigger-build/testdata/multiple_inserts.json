@@ -1,0 +1,112 @@
+{
+  "Records": [
+    {
+      "eventID": "3",
+      "eventName": "INSERT",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1678886400,
+        "Keys": {
+          "pk": {
+            "S": "frontend/prod"
+          },
+          "sk": {
+            "S": "2HFj4kLmNoPqRsTuVwXz"
+          }
+        },
+        "NewImage": {
+          "pk": {
+            "S": "frontend/prod"
+          },
+          "sk": {
+            "S": "2HFj4kLmNoPqRsTuVwXz"
+          },
+          "repo": {
+            "S": "frontend"
+          },
+          "env": {
+            "S": "prod"
+          },
+          "branch": {
+            "S": "release"
+          },
+          "version": {
+            "S": "2.5.1-build.456"
+          },
+          "commitHash": {
+            "S": "def789abc012345"
+          },
+          "status": {
+            "S": "PENDING"
+          },
+          "created_at": {
+            "N": "1678886400"
+          },
+          "updated_at": {
+            "N": "1678886400"
+          }
+        },
+        "SequenceNumber": "333",
+        "SizeBytes": 26,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      },
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table/stream/2023-03-15T00:00:00.000"
+    },
+    {
+      "eventID": "4",
+      "eventName": "INSERT",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1678886405,
+        "Keys": {
+          "pk": {
+            "S": "backend/staging"
+          },
+          "sk": {
+            "S": "2HFj5kLmNoPqRsTuVwXa"
+          }
+        },
+        "NewImage": {
+          "pk": {
+            "S": "backend/staging"
+          },
+          "sk": {
+            "S": "2HFj5kLmNoPqRsTuVwXa"
+          },
+          "repo": {
+            "S": "backend"
+          },
+          "env": {
+            "S": "staging"
+          },
+          "branch": {
+            "S": "develop"
+          },
+          "version": {
+            "S": "3.0.0-beta.789"
+          },
+          "commitHash": {
+            "S": "fedcba987654321"
+          },
+          "status": {
+            "S": "PENDING"
+          },
+          "created_at": {
+            "N": "1678886405"
+          },
+          "updated_at": {
+            "N": "1678886405"
+          }
+        },
+        "SequenceNumber": "444",
+        "SizeBytes": 26,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      },
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table/stream/2023-03-15T00:00:00.000"
+    }
+  ]
+}

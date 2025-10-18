@@ -1,0 +1,201 @@
+{
+  "Records": [
+    {
+      "eventID": "5",
+      "eventName": "INSERT",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1678886400,
+        "Keys": {
+          "pk": {
+            "S": "api/dev"
+          },
+          "sk": {
+            "S": "2HFj6kLmNoPqRsTuVwXb"
+          }
+        },
+        "NewImage": {
+          "pk": {
+            "S": "api/dev"
+          },
+          "sk": {
+            "S": "2HFj6kLmNoPqRsTuVwXb"
+          },
+          "repo": {
+            "S": "api"
+          },
+          "env": {
+            "S": "dev"
+          },
+          "branch": {
+            "S": "feature/new-endpoint"
+          },
+          "version": {
+            "S": "1.2.3-build.999"
+          },
+          "commitHash": {
+            "S": "123abc456def789"
+          },
+          "status": {
+            "S": "PENDING"
+          },
+          "created_at": {
+            "N": "1678886400"
+          },
+          "updated_at": {
+            "N": "1678886400"
+          }
+        },
+        "SequenceNumber": "555",
+        "SizeBytes": 26,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      },
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table/stream/2023-03-15T00:00:00.000"
+    },
+    {
+      "eventID": "6",
+      "eventName": "MODIFY",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1678886460,
+        "Keys": {
+          "pk": {
+            "S": "api/dev"
+          },
+          "sk": {
+            "S": "2HFj6kLmNoPqRsTuVwXb"
+          }
+        },
+        "NewImage": {
+          "pk": {
+            "S": "api/dev"
+          },
+          "sk": {
+            "S": "2HFj6kLmNoPqRsTuVwXb"
+          },
+          "repo": {
+            "S": "api"
+          },
+          "env": {
+            "S": "dev"
+          },
+          "branch": {
+            "S": "feature/new-endpoint"
+          },
+          "version": {
+            "S": "1.2.3-build.999"
+          },
+          "commitHash": {
+            "S": "123abc456def789"
+          },
+          "status": {
+            "S": "SUCCESS"
+          },
+          "created_at": {
+            "N": "1678886400"
+          },
+          "updated_at": {
+            "N": "1678886460"
+          },
+          "finished_at": {
+            "N": "1678886460"
+          }
+        },
+        "OldImage": {
+          "pk": {
+            "S": "api/dev"
+          },
+          "sk": {
+            "S": "2HFj6kLmNoPqRsTuVwXb"
+          },
+          "repo": {
+            "S": "api"
+          },
+          "env": {
+            "S": "dev"
+          },
+          "branch": {
+            "S": "feature/new-endpoint"
+          },
+          "version": {
+            "S": "1.2.3-build.999"
+          },
+          "commitHash": {
+            "S": "123abc456def789"
+          },
+          "status": {
+            "S": "IN_PROGRESS"
+          },
+          "created_at": {
+            "N": "1678886400"
+          },
+          "updated_at": {
+            "N": "1678886420"
+          }
+        },
+        "SequenceNumber": "666",
+        "SizeBytes": 59,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      },
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table/stream/2023-03-15T00:00:00.000"
+    },
+    {
+      "eventID": "7",
+      "eventName": "REMOVE",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1678886500,
+        "Keys": {
+          "pk": {
+            "S": "old-service/dev"
+          },
+          "sk": {
+            "S": "2HFj7kLmNoPqRsTuVwXc"
+          }
+        },
+        "OldImage": {
+          "pk": {
+            "S": "old-service/dev"
+          },
+          "sk": {
+            "S": "2HFj7kLmNoPqRsTuVwXc"
+          },
+          "repo": {
+            "S": "old-service"
+          },
+          "env": {
+            "S": "dev"
+          },
+          "branch": {
+            "S": "main"
+          },
+          "version": {
+            "S": "0.9.0-build.111"
+          },
+          "commitHash": {
+            "S": "old123old456old"
+          },
+          "status": {
+            "S": "FAILED"
+          },
+          "created_at": {
+            "N": "1678886300"
+          },
+          "updated_at": {
+            "N": "1678886350"
+          }
+        },
+        "SequenceNumber": "777",
+        "SizeBytes": 38,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      },
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table/stream/2023-03-15T00:00:00.000"
+    }
+  ]
+}

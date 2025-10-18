@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write(file_path:*/internal/gql/schema.graphqls)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/scripts/sync-graphql-schema.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit(file_path:*/internal/gql/schema.graphqls)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/scripts/sync-graphql-schema.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template with unauthorized IAM policy actions - should fail policy
+
+Resources:
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: api-handler
+      Runtime: nodejs18.x
+      Handler: app.handler
+      Code:
+        ZipFile: >-
+          exports.handler = async (event) => { 
+            return { 
+              statusCode: 200, 
+              body: JSON.stringify({message: 'API response'}) 
+            }; 
+          };
+      Role: !GetAtt ApiRole.Arn
+
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: api-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  UnauthorizedPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: UnauthorizedActions
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - s3:GetObject  # This should be rejected
+              - ec2:DescribeInstances  # This should be rejected
+            Resource: "*"
+      Roles:
+        - !Ref ApiRole
