@@ -1,0 +1,30 @@
+{
+  "name": "aws-deployer",
+  "description": "Serverless CloudFormation deployment automation with support for single and multi-account deployments via AWS Step Functions",
+  "version": "1.0.0",
+  "author": {
+    "name": "Matt Ho"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/savaki/aws-deployer"
+  },
+  "keywords": [
+    "aws",
+    "cloudformation",
+    "deployment",
+    "step-functions",
+    "serverless",
+    "multi-account",
+    "stacksets",
+    "lambda",
+    "go"
+  ],
+  "skills": {
+    "setup-deployer": {
+      "name": "Setup AWS Deployer",
+      "description": "Interactive guide for setting up and configuring AWS Deployer, from infrastructure deployment to GitHub CI/CD integration",
+      "file": "skills/setup-deployer.md"
+    }
+  }
+}
