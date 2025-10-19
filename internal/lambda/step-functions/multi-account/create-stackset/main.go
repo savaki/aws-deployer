@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -24,6 +22,7 @@ import (
 	"github.com/savaki/aws-deployer/internal/constants"
 	"github.com/savaki/aws-deployer/internal/dao/builddao"
 	"github.com/savaki/aws-deployer/internal/di"
+	"github.com/savaki/aws-deployer/internal/utils"
 	"github.com/urfave/cli/v2"
 )
 
@@ -219,7 +218,7 @@ func (h *Handler) fetchParametersFromS3(ctx context.Context, bucket, key, env st
 	}
 
 	// Both exist - merge them
-	merged := mergeParameters(base, override)
+	merged := utils.MergeParameters(base, override)
 	logger.Info().
 		Str("env", env).
 		Any("base", base).
@@ -463,25 +462,4 @@ func injectEnvironmentParameter(parameters []types.Parameter, env string) []type
 		ParameterKey:   aws.String("Env"),
 		ParameterValue: aws.String(env),
 	})
-}
-
-// mergeParameters merges maps provided with the later map having higher precedence
-// Returns a new parameter list with merged results
-func mergeParameters(pp ...map[string]string) (results []types.Parameter) {
-	m := map[string]string{}
-	for _, p := range pp {
-		for k, v := range p {
-			m[k] = v
-		}
-	}
-
-	for _, k := range slices.Collect(maps.Keys(m)) {
-		v := m[k]
-		results = append(results, types.Parameter{
-			ParameterKey:   aws.String(k),
-			ParameterValue: aws.String(v),
-		})
-	}
-
-	return results
 }
