@@ -1,0 +1,10 @@
+{
+  "savaki/aws-deployer": {
+    "aws-deployer": {
+      "source": {
+        "source": "github",
+        "repo": "savaki/aws-deployer"
+      }
+    }
+  }
+}
