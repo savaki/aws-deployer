@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "aws-deployer",
-      "source": "https://github.com/savaki/aws-deployer",
+      "source": "./claude-plugin",
       "description": "Serverless CloudFormation deployment automation with support for single and multi-account deployments via AWS Step Functions",
       "version": "1.0.0",
       "author": {
