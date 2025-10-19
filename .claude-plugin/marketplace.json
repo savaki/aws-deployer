@@ -2,7 +2,7 @@
   "name": "savaki/aws-deployer",
   "owner": {
     "name": "Matt Ho",
-    "email": "matt.ho@gmail.com"
+    "url": "https://github.com/savaki"
   },
   "plugins": [
     {
