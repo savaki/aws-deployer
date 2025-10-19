@@ -23,6 +23,7 @@ import (
 	"github.com/savaki/aws-deployer/internal/models"
 	"github.com/savaki/aws-deployer/internal/policy"
 	"github.com/savaki/aws-deployer/internal/services"
+	"github.com/savaki/aws-deployer/internal/utils"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -267,7 +268,7 @@ func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env s
 		return nil, err
 	}
 
-	var baseParams []types.Parameter
+	var baseParams map[string]string
 	if err := json.Unmarshal([]byte(content), &baseParams); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON parameters: %w", err)
 	}
@@ -279,21 +280,21 @@ func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env s
 		logger.Info().
 			Str("env_key", envKey).
 			Msg("No env-specific parameters found, using base parameters only")
-		return baseParams, nil
+		return utils.MergeParameters(baseParams), nil
 	}
 
 	// Parse env-specific parameters
-	var envParams []types.Parameter
+	var envParams map[string]string
 	if err := json.Unmarshal([]byte(envContent), &envParams); err != nil {
 		logger.Warn().
 			Err(err).
 			Str("env_key", envKey).
 			Msg("Failed to parse env-specific parameters, using base parameters only")
-		return baseParams, nil
+		return utils.MergeParameters(baseParams), nil
 	}
 
 	// Merge env-specific params on top of base params
-	merged := mergeParameters(baseParams, envParams)
+	merged := utils.MergeParameters(baseParams, envParams)
 
 	logger.Info().
 		Int("base_count", len(baseParams)).
@@ -302,48 +303,6 @@ func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env s
 		Msg("Merged base and env-specific parameters")
 
 	return merged, nil
-}
-
-// mergeParameters merges env-specific parameters on top of base parameters
-// If a parameter exists in both, env-specific wins
-func mergeParameters(base, override []types.Parameter) []types.Parameter {
-	// Create map of override parameters by key
-	overrideMap := make(map[string]types.Parameter)
-	for _, param := range override {
-		if param.ParameterKey != nil {
-			overrideMap[*param.ParameterKey] = param
-		}
-	}
-
-	// Build result: base params with overrides applied
-	result := make([]types.Parameter, 0, len(base)+len(override))
-	seen := make(map[string]bool)
-
-	for _, param := range base {
-		if param.ParameterKey == nil {
-			continue
-		}
-		key := *param.ParameterKey
-
-		if overrideParam, exists := overrideMap[key]; exists {
-			result = append(result, overrideParam)
-		} else {
-			result = append(result, param)
-		}
-		seen[key] = true
-	}
-
-	// Add any new parameters from override that weren't in base
-	for _, param := range override {
-		if param.ParameterKey != nil {
-			key := *param.ParameterKey
-			if !seen[key] {
-				result = append(result, param)
-			}
-		}
-	}
-
-	return result
 }
 
 // replaceFilename replaces the filename in an S3 key
