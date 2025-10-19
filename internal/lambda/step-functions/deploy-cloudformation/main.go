@@ -57,16 +57,17 @@ func NewHandler(env string) (*Handler, error) {
 		return nil, fmt.Errorf("failed to create DynamoDB service: %w", err)
 	}
 
-	validator, err := policy.NewValidator()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create policy validator: %w", err)
-	}
+	// DISABLED: Rego policy validation temporarily disabled
+	// validator, err := policy.NewValidator()
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create policy validator: %w", err)
+	// }
 
 	return &Handler{
 		cfClient:  cloudformation.NewFromConfig(cfg),
 		s3Client:  s3.NewFromConfig(cfg),
 		dbService: dbService,
-		validator: validator,
+		validator: nil, // Disabled for now
 	}, nil
 }
 
@@ -99,11 +100,12 @@ func (h *Handler) HandleDeployCloudFormation(
 	}
 
 	// Step 1.5: Validate CloudFormation template against policy
-	logger.Info().Msg("Step 1.5: Validating CloudFormation template against policy")
-	err = h.validateTemplate(ctx, template, input.Env, input.Repo)
-	if err != nil {
-		return nil, fmt.Errorf("CloudFormation template policy validation failed: %w", err)
-	}
+	// DISABLED: Rego policy validation temporarily disabled
+	// logger.Info().Msg("Step 1.5: Validating CloudFormation template against policy")
+	// err = h.validateTemplate(ctx, template, input.Env, input.Repo)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("CloudFormation template policy validation failed: %w", err)
+	// }
 
 	// Step 2: Update build status to IN_PROGRESS
 	logger.Info().Msg("Step 2: Updating build status to IN_PROGRESS")

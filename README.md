@@ -128,6 +128,21 @@ The system consists of the following components:
     - `check-stack-status`: Monitors CloudFormation stack progress
     - `update-build-status`: Updates build status in DynamoDB
 
+## Known Issues / Development Notes
+
+### Rego Policy Validation - DISABLED
+
+⚠️ **CloudFormation template policy validation is currently disabled**
+
+The rego policy checks that validate CloudFormation templates against security policies have been temporarily disabled in:
+- `internal/lambda/step-functions/deploy-cloudformation/main.go` (lines 60-64, 101-107)
+
+To re-enable:
+1. Uncomment the validator initialization in `NewHandler()` function
+2. Uncomment the `validateTemplate()` call in `HandleDeployCloudFormation()` function
+
+Policy rules are still defined in `internal/policy/cloudformation.rego` for when this is re-enabled.
+
 ## Workflow
 
 1. When a `cloudformation-params.json` file is uploaded to `s3://lmvtfy-github-artifacts/{repo}/{version}/`, it triggers
