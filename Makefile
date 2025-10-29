@@ -11,7 +11,7 @@ GOMOD=$(GOCMD) mod
 # Build parameters
 BINARY_NAME=bootstrap
 BUILD_DIR=build
-LAMBDA_FUNCTIONS=s3-trigger trigger-build deploy-cloudformation check-stack-status update-build-status server rotator
+LAMBDA_FUNCTIONS=s3-trigger trigger-build verify-signatures deploy-cloudformation check-stack-status update-build-status server rotator
 MULTI_ACCOUNT_FUNCTIONS=acquire-lock fetch-targets initialize-deployments create-stackset deploy-stack-instances check-stackset-status aggregate-results release-lock
 
 # AWS parameters

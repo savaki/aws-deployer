@@ -26,6 +26,7 @@ This tool provides commands for:
 			commands.SetupAWSCommand(&logger),
 			commands.SetupGitHubCommand(&logger),
 			commands.SetupECRCommand(&logger),
+			commands.SetupSigningCommand(&logger),
 			commands.TargetsCommand(&logger),
 		},
 	}

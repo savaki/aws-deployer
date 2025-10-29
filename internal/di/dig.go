@@ -94,6 +94,10 @@ var core = []any{
 	ProvideDynamoDB,
 	ProvideStepFunctions,
 	ProvideOrchestrator,
+	ProvideSignerClient,
+	ProvideS3Client,
 	services.NewDynamoDBService,
 	services.NewSecretsManagerService,
+	services.NewSignatureVerifier,
+	services.NewContainerMetadataParser,
 }

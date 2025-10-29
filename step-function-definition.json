@@ -1,7 +1,49 @@
 {
-  "Comment": "CloudFormation deployment workflow",
-  "StartAt": "DeployCloudFormation",
+  "Comment": "CloudFormation deployment workflow with optional signature verification",
+  "StartAt": "VerifySignatures",
   "States": {
+    "VerifySignatures": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${VerifySignaturesFunction}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.verificationResult",
+      "Next": "CheckVerificationResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "HandleVerificationFailure",
+          "ResultPath": "$.verificationError"
+        }
+      ]
+    },
+    "CheckVerificationResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.verificationResult.Payload.verificationPassed",
+          "BooleanEquals": true,
+          "Next": "DeployCloudFormation"
+        }
+      ],
+      "Default": "HandleVerificationFailure"
+    },
+    "HandleVerificationFailure": {
+      "Type": "Pass",
+      "Parameters": {
+        "repo.$": "$.repo",
+        "env.$": "$.env",
+        "sk.$": "$.sk",
+        "error": {
+          "Cause.$": "States.Format('Signature verification failed: {}', $.verificationResult.Payload.errors)"
+        }
+      },
+      "Next": "HandleFailure"
+    },
     "DeployCloudFormation": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",

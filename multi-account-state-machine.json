@@ -1,7 +1,49 @@
 {
-  "Comment": "Multi-account CloudFormation deployment workflow with StackSets",
-  "StartAt": "AcquireLock",
+  "Comment": "Multi-account CloudFormation deployment workflow with StackSets and signature verification",
+  "StartAt": "VerifySignatures",
   "States": {
+    "VerifySignatures": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${Environment}-aws-deployer-verify-signatures",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.verificationResult",
+      "Next": "CheckVerificationResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "HandleVerificationFailure",
+          "ResultPath": "$.verificationError"
+        }
+      ]
+    },
+    "CheckVerificationResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.verificationResult.Payload.verificationPassed",
+          "BooleanEquals": true,
+          "Next": "AcquireLock"
+        }
+      ],
+      "Default": "HandleVerificationFailure"
+    },
+    "HandleVerificationFailure": {
+      "Type": "Pass",
+      "Parameters": {
+        "repo.$": "$.repo",
+        "env.$": "$.env",
+        "sk.$": "$.sk",
+        "error": {
+          "Cause.$": "States.Format('Signature verification failed: {}', $.verificationResult.Payload.errors)"
+        }
+      },
+      "Next": "HandleFailure"
+    },
     "AcquireLock": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",

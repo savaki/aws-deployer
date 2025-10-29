@@ -317,6 +317,30 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:Query
                 Resource: !GetAtt BuildsTable.Arn
+        - PolicyName: SignatureVerification
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - signer:GetSigningProfile
+                  - signer:DescribeSigningJob
+                  - signer:GetRevocationStatus
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/ecr-registries/*'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/signing/*'
 
   # IAM Role for Step Functions
   StepFunctionRole:
@@ -606,6 +630,27 @@ Resources:
         Variables:
           ENV: !Ref Env
           VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  VerifySignaturesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-verify-signatures'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub 'aws-deployer/${Version}/verify-signatures.zip'
+      Role: !GetAtt CloudFormationDeployerRole.Arn
+      Timeout: 300
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Env
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
       Tags:
         - Key: Environment
           Value: !Ref Env

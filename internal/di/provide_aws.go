@@ -7,7 +7,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	"github.com/aws/aws-sdk-go-v2/service/signer"
 	"github.com/savaki/aws-deployer/internal/dao/builddao"
 	"github.com/savaki/aws-deployer/internal/orchestrator"
 	"github.com/savaki/aws-deployer/internal/services"
@@ -23,6 +25,14 @@ func ProvideDynamoDB(config aws.Config) *dynamodb.Client {
 
 func ProvideStepFunctions(config aws.Config) *sfn.Client {
 	return sfn.NewFromConfig(config)
+}
+
+func ProvideS3Client(config aws.Config) *s3.Client {
+	return s3.NewFromConfig(config)
+}
+
+func ProvideSignerClient(config aws.Config) *signer.Client {
+	return signer.NewFromConfig(config)
 }
 
 func ProvideOrchestrator(sfnClient *sfn.Client, dao *builddao.DAO, config *services.Config) (*orchestrator.Orchestrator, error) {
