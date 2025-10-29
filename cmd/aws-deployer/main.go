@@ -25,6 +25,7 @@ This tool provides commands for:
 		Commands: []*cli.Command{
 			commands.SetupAWSCommand(&logger),
 			commands.SetupGitHubCommand(&logger),
+			commands.SetupECRCommand(&logger),
 			commands.TargetsCommand(&logger),
 		},
 	}

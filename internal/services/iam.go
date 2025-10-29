@@ -279,3 +279,66 @@ func (s *IAMService) CreateGitHubOIDCRole(ctx context.Context, roleName, owner, 
 	roleARN := fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, roleName)
 	return roleARN, nil
 }
+
+// AddECRPushPermissions adds ECR push permissions to an existing IAM role for specified repositories
+func (s *IAMService) AddECRPushPermissions(ctx context.Context, roleName string, repositoryARNs []string) error {
+	if len(repositoryARNs) == 0 {
+		return nil // Nothing to do
+	}
+
+	// Build ECR permissions policy
+	policyDocument := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:GetRepositoryPolicy",
+        "ecr:DescribeRepositories",
+        "ecr:ListImages",
+        "ecr:DescribeImages",
+        "ecr:BatchGetImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage"
+      ],
+      "Resource": %s
+    }
+  ]
+}`, formatResourceArray(repositoryARNs))
+
+	// Attach/update the inline policy to the role
+	_, err := s.client.PutRolePolicy(ctx, &iam.PutRolePolicyInput{
+		RoleName:       aws.String(roleName),
+		PolicyName:     aws.String("github-ecr-access"),
+		PolicyDocument: aws.String(policyDocument),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to attach/update ECR policy to role: %w", err)
+	}
+
+	return nil
+}
+
+// formatResourceArray formats a slice of ARNs as a JSON array string
+func formatResourceArray(arns []string) string {
+	if len(arns) == 0 {
+		return "[]"
+	}
+
+	parts := make([]string, len(arns))
+	for i, arn := range arns {
+		parts[i] = fmt.Sprintf(`"%s"`, arn)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
