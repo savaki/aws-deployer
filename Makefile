@@ -56,6 +56,10 @@ build: clean
 	@cd $(BUILD_DIR)/trigger-build && zip -r ../trigger-build.zip .
 
 	# Build step function Lambda functions
+	@echo "Building verify-signatures..."
+	@cd internal/lambda/step-functions/verify-signatures && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../../$(BUILD_DIR)/verify-signatures/$(BINARY_NAME) .
+	@cd $(BUILD_DIR)/verify-signatures && zip -r ../verify-signatures.zip .
+
 	@echo "Building deploy-cloudformation..."
 	@cd internal/lambda/step-functions/deploy-cloudformation && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../../$(BUILD_DIR)/deploy-cloudformation/$(BINARY_NAME) .
 	@cd $(BUILD_DIR)/deploy-cloudformation && zip -r ../deploy-cloudformation.zip .
@@ -178,6 +182,12 @@ update-lambda-code: upload-to-s3
 		--function-name $(ENV)-aws-deployer-trigger-build \
 		--s3-bucket $(S3_BUCKET) \
 		--s3-key aws-deployer/$(VERSION)/trigger-build.zip \
+		--region $(AWS_REGION)
+
+	@aws lambda update-function-code \
+		--function-name $(ENV)-aws-deployer-verify-signatures \
+		--s3-bucket $(S3_BUCKET) \
+		--s3-key aws-deployer/$(VERSION)/verify-signatures.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \

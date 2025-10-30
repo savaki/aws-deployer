@@ -143,7 +143,7 @@ func (h *Handler) HandleVerifySignatures(
 			result.VerificationPassed = false
 
 			if enforcementMode == "enforce" {
-				return result, fmt.Errorf(errMsg)
+				return result, fmt.Errorf("%s", errMsg)
 			}
 		}
 	} else {
@@ -165,7 +165,7 @@ func (h *Handler) HandleVerifySignatures(
 			result.VerificationPassed = false
 
 			if enforcementMode == "enforce" {
-				return result, fmt.Errorf(errMsg)
+				return result, fmt.Errorf("%s", errMsg)
 			}
 		} else {
 			// Validate registries
@@ -176,7 +176,7 @@ func (h *Handler) HandleVerifySignatures(
 				result.VerificationPassed = false
 
 				if enforcementMode == "enforce" {
-					return result, fmt.Errorf(errMsg)
+					return result, fmt.Errorf("%s", errMsg)
 				}
 			}
 

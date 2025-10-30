@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/savaki/aws-deployer/internal/dao/builddao"
 	"github.com/savaki/aws-deployer/internal/orchestrator"
+	"github.com/segmentio/ksuid"
 )
 
 // Redeploy resolves the redeploy mutation - triggers a redeploy of a specific build
@@ -23,11 +24,15 @@ func (r *Resolver) Redeploy(ctx context.Context, args struct{ BuildId string }) 
 		return nil, fmt.Errorf("failed to get build: %w", err)
 	}
 
+	// Generate new KSUID for the redeployment to avoid execution name conflicts
+	sk := ksuid.New().String()
+
 	logger.Info().
 		Str("repo", build.Repo).
 		Str("env", build.Env).
 		Str("version", build.Version).
-		Str("sk", build.SK).
+		Str("original_sk", build.SK).
+		Str("new_sk", sk).
 		Msg("Triggering redeploy for build")
 
 	// Construct Step Function input from build record
@@ -36,7 +41,7 @@ func (r *Resolver) Redeploy(ctx context.Context, args struct{ BuildId string }) 
 		Env:        build.Env,
 		Branch:     build.Branch,
 		Version:    build.Version,
-		SK:         build.SK,
+		SK:         sk,
 		CommitHash: build.CommitHash,
 		S3Bucket:   r.appConfig.S3Bucket,
 		S3Key:      fmt.Sprintf("%s/%s/%s", build.Repo, build.Branch, build.Version),
@@ -45,13 +50,13 @@ func (r *Resolver) Redeploy(ctx context.Context, args struct{ BuildId string }) 
 	// Start Step Functions execution
 	executionArn, err := r.orchestrator.StartExecution(ctx, input)
 	if err != nil {
-		// Update build status to FAILED
+		// Update build status to FAILED using the new SK
 		pk := builddao.NewPK(build.Repo, build.Env)
 		status := builddao.BuildStatusFailed
 		errorMsg := fmt.Sprintf("Failed to start step function: %v", err)
 		if updateErr := r.build.UpdateStatus(ctx, builddao.UpdateInput{
 			PK:       pk,
-			SK:       build.SK,
+			SK:       sk,
 			Status:   &status,
 			ErrorMsg: &errorMsg,
 		}); updateErr != nil {
@@ -64,7 +69,7 @@ func (r *Resolver) Redeploy(ctx context.Context, args struct{ BuildId string }) 
 		Str("execution_arn", executionArn).
 		Str("repo", build.Repo).
 		Str("env", build.Env).
-		Str("sk", build.SK).
+		Str("sk", sk).
 		Msg("Successfully started redeploy execution")
 
 	// Return the root resolver to allow query chaining
