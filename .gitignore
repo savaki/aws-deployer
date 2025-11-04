@@ -7,7 +7,6 @@
 # ignore generated
 *.zip
 .claude/settings.local.json
-.claude/skills
 bootstrap
 build/
 coverage.out
