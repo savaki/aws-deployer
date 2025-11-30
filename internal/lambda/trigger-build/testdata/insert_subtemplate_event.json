@@ -1,7 +1,7 @@
 {
   "Records": [
     {
-      "eventID": "1",
+      "eventID": "10",
       "eventName": "INSERT",
       "eventVersion": "1.1",
       "eventSource": "aws:dynamodb",
@@ -10,21 +10,21 @@
         "ApproximateCreationDateTime": 1678886400,
         "Keys": {
           "pk": {
-            "S": "test-repo/dev"
+            "S": "myapp:worker/dev"
           },
           "sk": {
-            "S": "2HFj3kLmNoPqRsTuVwXy"
+            "S": "2HFj8kLmNoPqRsTuVwXd"
           }
         },
         "NewImage": {
           "pk": {
-            "S": "test-repo/dev"
+            "S": "myapp:worker/dev"
           },
           "sk": {
-            "S": "2HFj3kLmNoPqRsTuVwXy"
+            "S": "2HFj8kLmNoPqRsTuVwXd"
           },
           "repo": {
-            "S": "test-repo"
+            "S": "myapp:worker"
           },
           "env": {
             "S": "dev"
@@ -41,6 +41,15 @@
           "status": {
             "S": "PENDING"
           },
+          "stack_name": {
+            "S": "dev-myapp-worker"
+          },
+          "template_name": {
+            "S": "worker"
+          },
+          "base_repo": {
+            "S": "myapp"
+          },
           "created_at": {
             "N": "1678886400"
           },
@@ -48,7 +57,7 @@
             "N": "1678886400"
           }
         },
-        "SequenceNumber": "111",
+        "SequenceNumber": "888",
         "SizeBytes": 26,
         "StreamViewType": "NEW_AND_OLD_IMAGES"
       },

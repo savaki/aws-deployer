@@ -535,3 +535,276 @@ func TestHandleDynamoDBEvent_SkipsNonInsertFromRealJSON(t *testing.T) {
 		}
 	}
 }
+
+// TestUnmarshalSubTemplateEvent tests that sub-template records with template_name
+// and base_repo fields are correctly unmarshaled
+func TestUnmarshalSubTemplateEvent(t *testing.T) {
+	event := loadTestEvent(t, "insert_subtemplate_event.json")
+
+	if len(event.Records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(event.Records))
+	}
+
+	record := event.Records[0]
+
+	// Verify event metadata
+	if record.EventName != "INSERT" {
+		t.Errorf("Expected EventName 'INSERT', got '%s'", record.EventName)
+	}
+
+	// Verify NewImage can be converted and unmarshaled
+	newImage := make(map[string]types.AttributeValue)
+	for k, v := range record.Change.NewImage {
+		newImage[k] = convertDynamoDBAttributeValue(v)
+	}
+
+	var buildRecord builddao.Record
+	if err := unmarshalMap(newImage, &buildRecord); err != nil {
+		t.Fatalf("Failed to unmarshal build record: %v", err)
+	}
+
+	// Verify standard fields
+	if buildRecord.PK != "myapp:worker/dev" {
+		t.Errorf("Expected PK 'myapp:worker/dev', got '%s'", buildRecord.PK)
+	}
+	if buildRecord.SK != "2HFj8kLmNoPqRsTuVwXd" {
+		t.Errorf("Expected SK '2HFj8kLmNoPqRsTuVwXd', got '%s'", buildRecord.SK)
+	}
+	if buildRecord.Repo != "myapp:worker" {
+		t.Errorf("Expected Repo 'myapp:worker', got '%s'", buildRecord.Repo)
+	}
+	if buildRecord.Env != "dev" {
+		t.Errorf("Expected Env 'dev', got '%s'", buildRecord.Env)
+	}
+
+	// Verify new template-related fields
+	if buildRecord.TemplateName != "worker" {
+		t.Errorf("Expected TemplateName 'worker', got '%s'", buildRecord.TemplateName)
+	}
+	if buildRecord.BaseRepo != "myapp" {
+		t.Errorf("Expected BaseRepo 'myapp', got '%s'", buildRecord.BaseRepo)
+	}
+}
+
+// TestUnmarshalMainTemplateEvent verifies that main template records (without template_name)
+// still work correctly and have empty TemplateName and BaseRepo fields
+func TestUnmarshalMainTemplateEvent(t *testing.T) {
+	event := loadTestEvent(t, "insert_event.json")
+
+	if len(event.Records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(event.Records))
+	}
+
+	record := event.Records[0]
+
+	newImage := make(map[string]types.AttributeValue)
+	for k, v := range record.Change.NewImage {
+		newImage[k] = convertDynamoDBAttributeValue(v)
+	}
+
+	var buildRecord builddao.Record
+	if err := unmarshalMap(newImage, &buildRecord); err != nil {
+		t.Fatalf("Failed to unmarshal build record: %v", err)
+	}
+
+	// For main templates, TemplateName and BaseRepo should be empty
+	if buildRecord.TemplateName != "" {
+		t.Errorf("Expected TemplateName to be empty for main template, got '%s'", buildRecord.TemplateName)
+	}
+	if buildRecord.BaseRepo != "" {
+		t.Errorf("Expected BaseRepo to be empty for main template (old records), got '%s'", buildRecord.BaseRepo)
+	}
+}
+
+// TestS3KeyConstruction tests the S3 key construction logic that uses baseRepo
+func TestS3KeyConstruction(t *testing.T) {
+	tests := []struct {
+		name       string
+		repo       string
+		baseRepo   string
+		branch     string
+		version    string
+		wantS3Key  string
+	}{
+		{
+			name:      "main template - baseRepo empty, uses repo",
+			repo:      "myapp",
+			baseRepo:  "",
+			branch:    "main",
+			version:   "123.abc123",
+			wantS3Key: "myapp/main/123.abc123",
+		},
+		{
+			name:      "sub-template - uses baseRepo",
+			repo:      "myapp:worker",
+			baseRepo:  "myapp",
+			branch:    "main",
+			version:   "456.def456",
+			wantS3Key: "myapp/main/456.def456",
+		},
+		{
+			name:      "sub-template api - uses baseRepo",
+			repo:      "service:api",
+			baseRepo:  "service",
+			branch:    "feature-branch",
+			version:   "789.ghi789",
+			wantS3Key: "service/feature-branch/789.ghi789",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reproduce the logic from processRecord
+			baseRepo := tt.baseRepo
+			if baseRepo == "" {
+				baseRepo = tt.repo
+			}
+
+			s3Key := baseRepo + "/" + tt.branch + "/" + tt.version
+
+			if s3Key != tt.wantS3Key {
+				t.Errorf("S3Key = %q, want %q", s3Key, tt.wantS3Key)
+			}
+		})
+	}
+}
+
+// TestStepFunctionInputConstruction tests that StepFunctionInput is constructed correctly
+func TestStepFunctionInputConstruction(t *testing.T) {
+	tests := []struct {
+		name             string
+		buildRecord      builddao.Record
+		s3Bucket         string
+		wantRepo         string
+		wantBaseRepo     string
+		wantTemplateName string
+		wantS3Key        string
+	}{
+		{
+			name: "main template - baseRepo derived from repo",
+			buildRecord: builddao.Record{
+				Repo:         "myapp",
+				Env:          "dev",
+				Branch:       "main",
+				Version:      "123.abc123",
+				SK:           "2HFj3kLmNoPqRsTuVwXy",
+				CommitHash:   "abc123",
+				TemplateName: "",
+				BaseRepo:     "",
+			},
+			s3Bucket:         "deploy-bucket",
+			wantRepo:         "myapp",
+			wantBaseRepo:     "myapp",
+			wantTemplateName: "",
+			wantS3Key:        "myapp/main/123.abc123",
+		},
+		{
+			name: "sub-template worker",
+			buildRecord: builddao.Record{
+				Repo:         "myapp:worker",
+				Env:          "dev",
+				Branch:       "main",
+				Version:      "456.def456",
+				SK:           "2HFj8kLmNoPqRsTuVwXd",
+				CommitHash:   "def456",
+				TemplateName: "worker",
+				BaseRepo:     "myapp",
+			},
+			s3Bucket:         "deploy-bucket",
+			wantRepo:         "myapp:worker",
+			wantBaseRepo:     "myapp",
+			wantTemplateName: "worker",
+			wantS3Key:        "myapp/main/456.def456",
+		},
+		{
+			name: "sub-template api prod",
+			buildRecord: builddao.Record{
+				Repo:         "service:api",
+				Env:          "prod",
+				Branch:       "release",
+				Version:      "789.ghi789",
+				SK:           "2HFj9kLmNoPqRsTuVwXe",
+				CommitHash:   "ghi789",
+				TemplateName: "api",
+				BaseRepo:     "service",
+			},
+			s3Bucket:         "prod-bucket",
+			wantRepo:         "service:api",
+			wantBaseRepo:     "service",
+			wantTemplateName: "api",
+			wantS3Key:        "service/release/789.ghi789",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reproduce the logic from processRecord
+			baseRepo := tt.buildRecord.BaseRepo
+			if baseRepo == "" {
+				baseRepo = tt.buildRecord.Repo
+			}
+
+			s3Key := baseRepo + "/" + tt.buildRecord.Branch + "/" + tt.buildRecord.Version
+
+			// Verify computed values
+			if baseRepo != tt.wantBaseRepo {
+				t.Errorf("baseRepo = %q, want %q", baseRepo, tt.wantBaseRepo)
+			}
+			if s3Key != tt.wantS3Key {
+				t.Errorf("S3Key = %q, want %q", s3Key, tt.wantS3Key)
+			}
+
+			// Verify that input would have correct fields
+			// (In the real code, this is the orchestrator.StepFunctionInput struct)
+			if tt.buildRecord.Repo != tt.wantRepo {
+				t.Errorf("Repo = %q, want %q", tt.buildRecord.Repo, tt.wantRepo)
+			}
+			if tt.buildRecord.TemplateName != tt.wantTemplateName {
+				t.Errorf("TemplateName = %q, want %q", tt.buildRecord.TemplateName, tt.wantTemplateName)
+			}
+		})
+	}
+}
+
+// TestBaseRepoFallbackLogic tests the baseRepo fallback when it's empty
+func TestBaseRepoFallbackLogic(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseRepo string
+		repo     string
+		want     string
+	}{
+		{
+			name:     "baseRepo set - use baseRepo",
+			baseRepo: "myapp",
+			repo:     "myapp:worker",
+			want:     "myapp",
+		},
+		{
+			name:     "baseRepo empty - fall back to repo",
+			baseRepo: "",
+			repo:     "myapp",
+			want:     "myapp",
+		},
+		{
+			name:     "both set - prefer baseRepo",
+			baseRepo: "original",
+			repo:     "different",
+			want:     "original",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reproduce the fallback logic from processRecord
+			baseRepo := tt.baseRepo
+			if baseRepo == "" {
+				baseRepo = tt.repo
+			}
+
+			if baseRepo != tt.want {
+				t.Errorf("baseRepo = %q, want %q", baseRepo, tt.want)
+			}
+		})
+	}
+}

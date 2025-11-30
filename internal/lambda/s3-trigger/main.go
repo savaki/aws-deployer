@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -18,6 +20,10 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// templateNameRegex matches cloudformation-{name}-params.json
+// but excludes cloudformation-params.json and cloudformation-params.{env}.json
+var templateNameRegex = regexp.MustCompile(`^cloudformation-(.+)-params\.json$`)
+
 type Handler struct {
 	dbService *services.DynamoDBService
 	targetDAO *targetdao.DAO
@@ -28,6 +34,31 @@ func NewHandler(dbService *services.DynamoDBService, targetDAO *targetdao.DAO) *
 		dbService: dbService,
 		targetDAO: targetDAO,
 	}
+}
+
+// extractTemplateName extracts the template name from a params filename.
+// Returns the template name for sub-templates (e.g., "worker" from "cloudformation-worker-params.json")
+// Returns empty string for the main template ("cloudformation-params.json") or env-specific files.
+func extractTemplateName(filename string) string {
+	// Main template params file
+	if filename == "cloudformation-params.json" {
+		return ""
+	}
+
+	// Check for sub-template params file: cloudformation-{name}-params.json
+	match := templateNameRegex.FindStringSubmatch(filename)
+	if match == nil {
+		return ""
+	}
+
+	name := match[1]
+	// Exclude env-specific files like "cloudformation-params.dev.json"
+	// These would match as "params.dev" which contains a dot
+	if strings.Contains(name, ".") {
+		return ""
+	}
+
+	return name
 }
 
 func (h *Handler) HandleS3Event(ctx context.Context, event events.S3Event) error {
@@ -46,8 +77,18 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 	logger := zerolog.Ctx(ctx)
 	key := record.S3.Object.Key
 
-	if !strings.HasSuffix(key, "cloudformation-params.json") {
-		logger.Info().Str("key", key).Msg("Ignoring non-cloudformation-params.json file")
+	// Extract filename from path
+	filename := filepath.Base(key)
+
+	// Check if this is a params file we should process
+	// Main template: cloudformation-params.json
+	// Sub-template: cloudformation-{name}-params.json
+	templateName := extractTemplateName(filename)
+	isMainTemplate := filename == "cloudformation-params.json"
+	isSubTemplate := templateName != ""
+
+	if !isMainTemplate && !isSubTemplate {
+		logger.Info().Str("key", key).Msg("Ignoring non-params file")
 		return nil
 	}
 
@@ -57,7 +98,7 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 			errors.ErrInvalidS3KeyFormat, key)
 	}
 
-	repo := pathParts[0]
+	baseRepo := pathParts[0]
 	branch := pathParts[1]
 	version := pathParts[2]
 
@@ -70,14 +111,20 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 	buildNumber := versionParts[0]
 	commitHash := strings.Join(versionParts[1:], ".")
 
+	// For sub-templates, repo includes the template name (e.g., "myapp:worker")
+	repo := baseRepo
+	if templateName != "" {
+		repo = fmt.Sprintf("%s:%s", baseRepo, templateName)
+	}
+
 	// Query pipeline config to get initial environment
-	// Try repo-specific config first, fall back to default config
+	// Use base repo for config lookup (not sub-template name)
 	initialEnv := "dev" // Default fallback
-	config, err := h.targetDAO.GetConfig(ctx, repo)
+	config, err := h.targetDAO.GetConfig(ctx, baseRepo)
 	if err != nil {
 		logger.Warn().
 			Err(err).
-			Str("repo", repo).
+			Str("repo", baseRepo).
 			Msg("Failed to get repo-specific config, trying default config")
 	}
 
@@ -99,6 +146,7 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 		initialEnv = config.InitialEnv
 		logger.Info().
 			Str("repo", repo).
+			Str("base_repo", baseRepo).
 			Str("initial_env", initialEnv).
 			Bool("using_default", config.PK.String() == targetdao.DefaultRepo).
 			Msg("Using configured initial environment")
@@ -109,20 +157,28 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 			Msg("No initial environment configured, using default 'dev'")
 	}
 
-	stackName := fmt.Sprintf("%s-%s", initialEnv, repo)
+	// Stack name includes template name for sub-templates
+	// Main: {env}-{repo} (e.g., "dev-myapp")
+	// Sub:  {env}-{repo}-{template} (e.g., "dev-myapp-worker")
+	stackName := fmt.Sprintf("%s-%s", initialEnv, baseRepo)
+	if templateName != "" {
+		stackName = fmt.Sprintf("%s-%s-%s", initialEnv, baseRepo, templateName)
+	}
 
 	// Generate KSUID for this build
 	buildKSUID := ksuid.New().String()
 
 	createInput := builddao.CreateInput{
-		Repo:        repo,
-		Env:         initialEnv,
-		SK:          buildKSUID,
-		BuildNumber: buildNumber,
-		Branch:      branch,
-		Version:     version,
-		CommitHash:  commitHash,
-		StackName:   stackName,
+		Repo:         repo,
+		Env:          initialEnv,
+		SK:           buildKSUID,
+		BuildNumber:  buildNumber,
+		Branch:       branch,
+		Version:      version,
+		CommitHash:   commitHash,
+		StackName:    stackName,
+		TemplateName: templateName,
+		BaseRepo:     baseRepo,
 	}
 
 	_, err = h.dbService.PutBuild(ctx, createInput)
@@ -132,9 +188,12 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 
 	logger.Info().
 		Str("repo", repo).
+		Str("base_repo", baseRepo).
+		Str("template_name", templateName).
 		Str("env", initialEnv).
 		Str("ksuid", buildKSUID).
 		Str("version", version).
+		Str("stack_name", stackName).
 		Msg("Created build record with PENDING status")
 	return nil
 }

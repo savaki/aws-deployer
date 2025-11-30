@@ -35,7 +35,7 @@
           "version": {
             "S": "2.5.1-build.456"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "def789abc012345"
           },
           "status": {
@@ -89,7 +89,7 @@
           "version": {
             "S": "3.0.0-beta.789"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "fedcba987654321"
           },
           "status": {

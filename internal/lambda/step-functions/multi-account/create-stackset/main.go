@@ -33,11 +33,13 @@ type Handler struct {
 }
 
 type Input struct {
-	Env      string `json:"env"`
-	Repo     string `json:"repo"`
-	SK       string `json:"sk"` // Build KSUID
-	S3Bucket string `json:"s3_bucket"`
-	S3Key    string `json:"s3_key"` // Prefix like "repo/version/"
+	Env          string `json:"env"`
+	Repo         string `json:"repo"`
+	SK           string `json:"sk"` // Build KSUID
+	S3Bucket     string `json:"s3_bucket"`
+	S3Key        string `json:"s3_key"`                  // Prefix like "repo/version/"
+	TemplateName string `json:"template_name,omitempty"` // Template name for sub-templates (empty for main template)
+	BaseRepo     string `json:"base_repo,omitempty"`     // Original repo name without template suffix
 }
 
 type Output struct {
@@ -67,18 +69,40 @@ func NewHandler() (*Handler, error) {
 func (h *Handler) HandleCreateStackSet(ctx context.Context, input *Input) (*Output, error) {
 	logger := zerolog.Ctx(ctx)
 
-	stackSetName := fmt.Sprintf("%s-%s", input.Env, input.Repo)
-	templateURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%scloudformation.template",
+	// Determine base repo for stack set name (Repo may contain ":" for sub-templates which isn't allowed)
+	baseRepo := input.BaseRepo
+	if baseRepo == "" {
+		baseRepo = input.Repo
+	}
+
+	// StackSet name: {env}-{repo} for main, {env}-{repo}-{template} for sub-templates
+	stackSetName := fmt.Sprintf("%s-%s", input.Env, baseRepo)
+	if input.TemplateName != "" {
+		stackSetName = fmt.Sprintf("%s-%s-%s", input.Env, baseRepo, input.TemplateName)
+	}
+
+	// Determine template file name
+	// Main: cloudformation.template
+	// Sub:  cloudformation-{name}.template
+	templateFile := "cloudformation.template"
+	if input.TemplateName != "" {
+		templateFile = fmt.Sprintf("cloudformation-%s.template", input.TemplateName)
+	}
+
+	templateURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s%s",
 		input.S3Bucket,
-		strings.TrimRight(input.S3Key, "/")+"/")
+		strings.TrimRight(input.S3Key, "/")+"/",
+		templateFile)
 
 	logger.Info().
 		Str("stack_set_name", stackSetName).
 		Str("template_url", templateURL).
+		Str("template_name", input.TemplateName).
+		Str("base_repo", baseRepo).
 		Msg("Creating or updating StackSet")
 
 	// Fetch parameters from S3
-	parameters, err := h.fetchParametersFromS3(ctx, input.S3Bucket, input.S3Key, input.Env)
+	parameters, err := h.fetchParametersFromS3(ctx, input.S3Bucket, input.S3Key, input.Env, input.TemplateName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch parameters from S3: %w", err)
 	}
@@ -194,24 +218,35 @@ func (h *Handler) HandleCreateStackSet(ctx context.Context, input *Input) (*Outp
 	}, nil
 }
 
-// fetchParametersFromS3 reads cloudformation-params.json from S3 and returns CloudFormation parameters
-// It first loads cloudformation-params.json (base), then loads cloudformation-params.{env}.json (overrides)
-// and merges them, with env-specific values overriding base values for matching keys
+// fetchParametersFromS3 reads CloudFormation params from S3 and returns CloudFormation parameters
+// It first loads the base params, then loads env-specific overrides and merges them
+// For main template: cloudformation-params.json, cloudformation-params.{env}.json
+// For sub-templates: cloudformation-{name}-params.json, cloudformation-{name}-params.{env}.json
 // Returns empty parameters if no files exist (parameters are optional)
-func (h *Handler) fetchParametersFromS3(ctx context.Context, bucket, key, env string) ([]types.Parameter, error) {
+func (h *Handler) fetchParametersFromS3(ctx context.Context, bucket, key, env, templateName string) ([]types.Parameter, error) {
 	logger := zerolog.Ctx(ctx)
 
 	keyPrefix := strings.TrimRight(key, "/")
 
+	// Determine params file names based on template name
+	var baseFilename, overrideFilename string
+	if templateName != "" {
+		baseFilename = fmt.Sprintf("cloudformation-%s-params.json", templateName)
+		overrideFilename = fmt.Sprintf("cloudformation-%s-params.%s.json", templateName, env)
+	} else {
+		baseFilename = "cloudformation-params.json"
+		overrideFilename = fmt.Sprintf("cloudformation-params.%s.json", env)
+	}
+
 	// Load base params first
-	baseKey := fmt.Sprintf("%s/cloudformation-params.json", keyPrefix)
+	baseKey := fmt.Sprintf("%s/%s", keyPrefix, baseFilename)
 	base, _, err := h.fetchParamsFromKey(ctx, bucket, baseKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch %s: %w", baseKey, err)
 	}
 
 	// Load env-specific params
-	overrideKey := fmt.Sprintf("%s/cloudformation-params.%s.json", keyPrefix, env)
+	overrideKey := fmt.Sprintf("%s/%s", keyPrefix, overrideFilename)
 	override, _, err := h.fetchParamsFromKey(ctx, bucket, overrideKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch %s: %w", overrideKey, err)
@@ -221,6 +256,9 @@ func (h *Handler) fetchParametersFromS3(ctx context.Context, bucket, key, env st
 	merged := utils.MergeParameters(base, override)
 	logger.Info().
 		Str("env", env).
+		Str("template_name", templateName).
+		Str("base_key", baseKey).
+		Str("override_key", overrideKey).
 		Any("base", base).
 		Any("override", override).
 		Any("merged", merged).

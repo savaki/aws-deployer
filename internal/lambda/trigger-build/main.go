@@ -136,21 +136,32 @@ func (h *Handler) processRecord(ctx context.Context, record *events.DynamoDBEven
 
 	logger.Info().
 		Str("repo", buildRecord.Repo).
+		Str("base_repo", buildRecord.BaseRepo).
+		Str("template_name", buildRecord.TemplateName).
 		Str("env", buildRecord.Env).
 		Str("sk", buildRecord.SK).
 		Str("version", buildRecord.Version).
 		Msg("Processing new build record")
 
+	// Determine the base repo for S3 key construction
+	// For sub-templates, BaseRepo is set; for main templates, use Repo
+	baseRepo := buildRecord.BaseRepo
+	if baseRepo == "" {
+		baseRepo = buildRecord.Repo
+	}
+
 	// Construct Step Function input from build record
 	input := orchestrator.StepFunctionInput{
-		Repo:       buildRecord.Repo,
-		Env:        buildRecord.Env,
-		Branch:     buildRecord.Branch,
-		Version:    buildRecord.Version,
-		SK:         buildRecord.SK,
-		CommitHash: buildRecord.CommitHash,
-		S3Bucket:   h.config.S3Bucket,
-		S3Key:      fmt.Sprintf("%s/%s/%s", buildRecord.Repo, buildRecord.Branch, buildRecord.Version),
+		Repo:         buildRecord.Repo,
+		Env:          buildRecord.Env,
+		Branch:       buildRecord.Branch,
+		Version:      buildRecord.Version,
+		SK:           buildRecord.SK,
+		CommitHash:   buildRecord.CommitHash,
+		S3Bucket:     h.config.S3Bucket,
+		S3Key:        fmt.Sprintf("%s/%s/%s", baseRepo, buildRecord.Branch, buildRecord.Version),
+		TemplateName: buildRecord.TemplateName,
+		BaseRepo:     baseRepo,
 	}
 
 	// Route to appropriate deployment handler based on mode
@@ -344,9 +355,19 @@ func unmarshalMap(m map[string]types.AttributeValue, out interface{}) error {
 				buildRecord.Version = s.Value
 			}
 		}
-		if v, exists := m["commitHash"]; exists {
+		if v, exists := m["commit_hash"]; exists {
 			if s, ok := v.(*types.AttributeValueMemberS); ok {
 				buildRecord.CommitHash = s.Value
+			}
+		}
+		if v, exists := m["template_name"]; exists {
+			if s, ok := v.(*types.AttributeValueMemberS); ok {
+				buildRecord.TemplateName = s.Value
+			}
+		}
+		if v, exists := m["base_repo"]; exists {
+			if s, ok := v.(*types.AttributeValueMemberS); ok {
+				buildRecord.BaseRepo = s.Value
 			}
 		}
 		return nil
