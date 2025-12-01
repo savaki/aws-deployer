@@ -104,13 +104,11 @@ The system supports two deployment modes via the `DEPLOYMENT_MODE` parameter:
 
 **Build Tracking (`internal/dao/builddao/`)**
 - Primary key: `{repo}/{env}` (PK type), KSUID (SK)
-  - For sub-templates: `{repo}:{template}/{env}` (e.g., `myapp:worker/dev`)
 - "Latest magic records": Automatic denormalization for efficient latest-build queries
   - Uses `pk=latest/{env}` and `sk={repo}/{env}`
   - Created/updated automatically on every `UpdateStatus()` call
   - Enables querying latest builds without GSI
 - Build ID format: `{repo}/{env}:{ksuid}` (ID type)
-- Sub-template fields: `template_name` (e.g., "worker"), `base_repo` (e.g., "myapp")
 - Always use `builddao.NewPK(repo, env)` and `builddao.BuildID(pk, sk)` for type safety
 
 **Multi-Account Deployments (`internal/dao/targetdao/`, `internal/dao/deploymentdao/`, `internal/dao/lockdao/`)**
@@ -122,9 +120,7 @@ The system supports two deployment modes via the `DEPLOYMENT_MODE` parameter:
 **Step Functions Orchestration (`internal/orchestrator/`)**
 - Starts Step Function executions for deployments
 - Atomically updates build status to IN_PROGRESS with execution ARN
-- Execution naming: `{repo}-{env}-{ksuid}` (colons in repo replaced with dashes for sub-templates)
-  - Main: `myapp-dev-{ksuid}`
-  - Sub-template: `myapp-worker-dev-{ksuid}` (from `myapp:worker`)
+- Execution naming: `{repo}-{env}-{ksuid}` (e.g., `myapp-dev-{ksuid}`)
 
 **GraphQL API (`internal/gql/`)**
 - Schema: `internal/gql/schema.graphqls`
@@ -134,17 +130,13 @@ The system supports two deployment modes via the `DEPLOYMENT_MODE` parameter:
 ### Data Flow
 
 1. **Trigger**: GitHub Actions uploads params file to S3 at `s3://{bucket}/{repo}/{branch}/{version}/`
-   - `cloudformation-params.json` for main template
-   - `cloudformation-{name}-params.json` for sub-templates (e.g., `cloudformation-worker-params.json`)
-   - `deploy-manifest.json` (optional) for Docker image promotion
+   - `cloudformation-params.json` - triggers deployment
+   - `container-images.json` (optional) for Docker image promotion
 2. **S3 Lambda** (`internal/lambda/s3-trigger`): Creates PENDING build record with KSUID
-   - For sub-templates, sets `repo` as `{base-repo}:{template}` (e.g., `myapp:worker`)
-   - Sets `template_name` and `base_repo` fields for sub-templates
 3. **DynamoDB Stream** → **trigger-build Lambda**: Starts Step Function execution
-   - Execution name: `{repo}-{env}-{ksuid}` (colons replaced with dashes)
+   - Execution name: `{repo}-{env}-{ksuid}`
 4. **Step Function**: Orchestrates deployment (single or multi-account)
-   - **promote-images**: Promotes Docker images if `deploy-manifest.json` exists
-   - Selects correct template/params files based on `template_name`
+   - **promote-images**: Promotes Docker images if `container-images.json` exists
 5. **Status Updates**: Lambda functions update build status throughout workflow
 6. **GraphQL/Frontend**: Queries build records for UI display
 
@@ -158,9 +150,9 @@ All CloudFormation templates deployed via AWS Deployer should accept these stand
 - `S3Prefix` - S3 path to artifacts in format `{repo}/{branch}/{version}`
 
 **File naming convention:**
-- Main template: `cloudformation-params.json`, `cloudformation.template`
-- Sub-template: `cloudformation-{name}-params.json`, `cloudformation-{name}.template`
-- Environment overrides: `cloudformation-params.{env}.json` or `cloudformation-{name}-params.{env}.json`
+- Template: `cloudformation.template`
+- Parameters: `cloudformation-params.json`
+- Environment overrides: `cloudformation-params.{env}.json`
 
 ### Docker Image Promotion (Optional)
 
@@ -191,9 +183,7 @@ AWS Deployer can promote Docker images from a source ECR registry to target ECR 
 - Single-account: Runs after signature verification, before CloudFormation deployment
 - Multi-account: Runs after fetching targets, before initializing deployments
 
-**Stack naming:**
-- Main: `{env}-{repo}` (e.g., `dev-myapp`)
-- Sub-template: `{env}-{repo}-{template}` (e.g., `dev-myapp-worker`)
+**Stack naming:** `{env}-{repo}` (e.g., `dev-myapp`)
 
 ### Environment Configuration
 
@@ -269,7 +259,6 @@ func main() {
 ```go
 orchestrator := orchestrator.New(sfnClient, stateMachineArn, dao)
 
-// Main template
 input := orchestrator.StepFunctionInput{
     Repo:       "myapp",
     Env:        "dev",
@@ -279,20 +268,6 @@ input := orchestrator.StepFunctionInput{
     CommitHash: "abc123",
     S3Bucket:   "artifacts-bucket",
     S3Key:      "myapp/main/1.2.3/",
-}
-
-// Sub-template (worker)
-subTemplateInput := orchestrator.StepFunctionInput{
-    Repo:         "myapp:worker",      // Includes template suffix
-    Env:          "dev",
-    SK:           ksuid.New().String(),
-    Branch:       "main",
-    Version:      "1.2.3",
-    CommitHash:   "abc123",
-    S3Bucket:     "artifacts-bucket",
-    S3Key:        "myapp/main/1.2.3/", // Uses base repo path
-    TemplateName: "worker",            // Template name for file selection
-    BaseRepo:     "myapp",             // Original repo without suffix
 }
 
 executionArn, err := orchestrator.StartExecution(ctx, input)

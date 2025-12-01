@@ -37,6 +37,9 @@ DEPLOYMENT_MODE ?=
 VERSION_FILE := .version
 VERSION ?= $(shell if [ -f $(VERSION_FILE) ]; then cat $(VERSION_FILE); else date +%Y%m%d-%H%M%S | tee $(VERSION_FILE); fi)
 
+# S3 prefix for all deployment artifacts
+S3_PREFIX ?= _/aws-deployer/$(VERSION)
+
 .DEFAULT_GOAL := help
 
 all: build
@@ -145,85 +148,103 @@ deps:
 	@$(GOMOD) tidy
 
 upload-to-s3: build
-	@echo "Uploading Lambda packages to S3..."
+	@echo "Uploading deployment artifacts to S3..."
 	@echo "Version: $(VERSION)"
-	@aws s3 sync $(BUILD_DIR) s3://$(S3_BUCKET)/aws-deployer/$(VERSION)/ \
+	@echo "S3 Prefix: $(S3_PREFIX)"
+	@aws s3 sync $(BUILD_DIR) s3://$(S3_BUCKET)/$(S3_PREFIX)/ \
 		--exclude "*" \
 		--include "*.zip" \
+		--region $(AWS_REGION) \
+		--only-show-errors
+	@echo "Uploading CloudFormation template to S3..."
+	@aws s3 cp cloudformation.template s3://$(S3_BUCKET)/$(S3_PREFIX)/cloudformation.template \
 		--region $(AWS_REGION) \
 		--only-show-errors
 	@echo "Upload completed!"
 
 deploy-infrastructure: upload-to-s3
 	@echo "Deploying infrastructure..."
-	$(eval PARAMS := Env=$(ENV) S3BucketName=$(S3_BUCKET) Version=$(VERSION))
+	$(eval PARAMS := Env=$(ENV) S3BucketName=$(S3_BUCKET) Version=$(VERSION) S3Prefix=$(S3_PREFIX))
 	$(if $(ZONE_ID),$(eval PARAMS := $(PARAMS) ZoneId=$(ZONE_ID)))
 	$(if $(DOMAIN_NAME),$(eval PARAMS := $(PARAMS) DomainName=$(DOMAIN_NAME)))
 	$(if $(CERTIFICATE_ARN),$(eval PARAMS := $(PARAMS) CertificateArn=$(CERTIFICATE_ARN)))
 	$(if $(ALLOWED_EMAIL),$(eval PARAMS := $(PARAMS) AllowedEmail=$(ALLOWED_EMAIL)))
 	$(if $(ROTATION_SCHEDULE_DAYS),$(eval PARAMS := $(PARAMS) RotationScheduleDays=$(ROTATION_SCHEDULE_DAYS)))
 	$(if $(DEPLOYMENT_MODE),$(eval PARAMS := $(PARAMS) DeploymentMode=$(DEPLOYMENT_MODE)))
-	@aws cloudformation deploy \
-		--template-file cloudformation.template \
-		--stack-name $(ENV)-aws-deployer \
-		--parameter-overrides $(PARAMS) \
-		--capabilities CAPABILITY_NAMED_IAM \
-		--region $(AWS_REGION)
+	@if aws cloudformation describe-stacks --stack-name $(ENV)-aws-deployer --region $(AWS_REGION) >/dev/null 2>&1; then \
+		echo "Updating existing stack..."; \
+		aws cloudformation update-stack \
+			--template-url https://$(S3_BUCKET).s3.$(AWS_REGION).amazonaws.com/$(S3_PREFIX)/cloudformation.template \
+			--stack-name $(ENV)-aws-deployer \
+			--parameters $$(echo "$(PARAMS)" | sed 's/\([^= ]*\)=\([^ ]*\)/ParameterKey=\1,ParameterValue=\2/g' | tr ' ' '\n' | paste -sd ' ' -) \
+			--capabilities CAPABILITY_NAMED_IAM \
+			--region $(AWS_REGION) && \
+		aws cloudformation wait stack-update-complete --stack-name $(ENV)-aws-deployer --region $(AWS_REGION); \
+	else \
+		echo "Creating new stack..."; \
+		aws cloudformation create-stack \
+			--template-url https://$(S3_BUCKET).s3.$(AWS_REGION).amazonaws.com/$(S3_PREFIX)/cloudformation.template \
+			--stack-name $(ENV)-aws-deployer \
+			--parameters $$(echo "$(PARAMS)" | sed 's/\([^= ]*\)=\([^ ]*\)/ParameterKey=\1,ParameterValue=\2/g' | tr ' ' '\n' | paste -sd ' ' -) \
+			--capabilities CAPABILITY_NAMED_IAM \
+			--region $(AWS_REGION) && \
+		aws cloudformation wait stack-create-complete --stack-name $(ENV)-aws-deployer --region $(AWS_REGION); \
+	fi
 
 update-lambda-code: upload-to-s3
 	@echo "Updating Lambda function code from S3..."
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-s3-trigger \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/s3-trigger.zip \
+		--s3-key $(S3_PREFIX)/s3-trigger.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-trigger-build \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/trigger-build.zip \
+		--s3-key $(S3_PREFIX)/trigger-build.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-deploy-cloudformation \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/deploy-cloudformation.zip \
+		--s3-key $(S3_PREFIX)/deploy-cloudformation.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-check-stack-status \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/check-stack-status.zip \
+		--s3-key $(S3_PREFIX)/check-stack-status.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-update-build-status \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/update-build-status.zip \
+		--s3-key $(S3_PREFIX)/update-build-status.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-server \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/server.zip \
+		--s3-key $(S3_PREFIX)/server.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-rotator \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/rotator.zip \
+		--s3-key $(S3_PREFIX)/rotator.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-promote-images \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/promote-images.zip \
+		--s3-key $(S3_PREFIX)/promote-images.zip \
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-promote-images-multi \
 		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/promote-images.zip \
+		--s3-key $(S3_PREFIX)/promote-images.zip \
 		--region $(AWS_REGION) 2>/dev/null || true
 
 deploy: deploy-infrastructure configure-s3-notification
@@ -288,6 +309,7 @@ help:
 	@echo "  AWS_REGION           - AWS region (default: us-east-1)"
 	@echo "  ENV                  - Environment name (default: dev)"
 	@echo "  S3_BUCKET            - S3 bucket name (default: lmvtfy-github-artifacts)"
+	@echo "  S3_PREFIX            - S3 prefix for artifacts (default: _/aws-deployer/VERSION)"
 	@echo "  VERSION              - Version for deployment packages (default: YYYYMMDD-HHMMSS)"
 	@echo "  ZONE_ID              - Route53 Hosted Zone ID (optional)"
 	@echo "  DOMAIN_NAME          - Custom domain name for API Gateway (optional)"

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -13,16 +12,14 @@ import (
 
 // StepFunctionInput represents the input payload for Step Functions executions
 type StepFunctionInput struct {
-	Repo         string `json:"repo"`                    // Repository name (includes template suffix for sub-templates, e.g., "myapp:worker")
-	Env          string `json:"env"`                     // Environment name (dev, staging, prod)
-	Branch       string `json:"branch"`                  // Git branch
-	Version      string `json:"version"`                 // Version string
-	SK           string `json:"sk"`                      // KSUID - DynamoDB sort key
-	CommitHash   string `json:"commit_hash"`             // Git commit hash
-	S3Bucket     string `json:"s3_bucket"`               // S3 bucket containing artifacts
-	S3Key        string `json:"s3_key"`                  // S3 key prefix for artifacts
-	TemplateName string `json:"template_name,omitempty"` // Template name for sub-templates (empty for main template)
-	BaseRepo     string `json:"base_repo,omitempty"`     // Original repo name without template suffix
+	Repo       string `json:"repo"`        // Repository name
+	Env        string `json:"env"`         // Environment name (dev, staging, prod)
+	Branch     string `json:"branch"`      // Git branch
+	Version    string `json:"version"`     // Version string
+	SK         string `json:"sk"`          // KSUID - DynamoDB sort key
+	CommitHash string `json:"commit_hash"` // Git commit hash
+	S3Bucket   string `json:"s3_bucket"`   // S3 bucket containing artifacts
+	S3Key      string `json:"s3_key"`      // S3 key prefix for artifacts
 }
 
 // Orchestrator manages Step Functions execution lifecycle
@@ -50,10 +47,8 @@ func (o *Orchestrator) StartExecution(ctx context.Context, input StepFunctionInp
 		return "", fmt.Errorf("failed to marshal step function input: %w", err)
 	}
 
-	// Generate execution name - replace colons with dashes as Step Functions doesn't allow colons
-	// e.g., "myapp:worker" becomes "myapp-worker" in the execution name
-	safeRepo := strings.ReplaceAll(input.Repo, ":", "-")
-	executionName := fmt.Sprintf("%s-%s-%s", safeRepo, input.Env, input.SK)
+	// Generate execution name
+	executionName := fmt.Sprintf("%s-%s-%s", input.Repo, input.Env, input.SK)
 
 	// Start Step Functions execution
 	result, err := o.sfnClient.StartExecution(ctx, &sfn.StartExecutionInput{

@@ -36,6 +36,8 @@ type mockECRClient struct {
 	initiateLayerUploadFunc         func(ctx context.Context, params *ecr.InitiateLayerUploadInput, optFns ...func(*ecr.Options)) (*ecr.InitiateLayerUploadOutput, error)
 	uploadLayerPartFunc             func(ctx context.Context, params *ecr.UploadLayerPartInput, optFns ...func(*ecr.Options)) (*ecr.UploadLayerPartOutput, error)
 	completeLayerUploadFunc         func(ctx context.Context, params *ecr.CompleteLayerUploadInput, optFns ...func(*ecr.Options)) (*ecr.CompleteLayerUploadOutput, error)
+	createRepositoryFunc            func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error)
+	describeRepositoriesFunc        func(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error)
 }
 
 func (m *mockECRClient) BatchGetImage(ctx context.Context, params *ecr.BatchGetImageInput, optFns ...func(*ecr.Options)) (*ecr.BatchGetImageOutput, error) {
@@ -95,6 +97,25 @@ func (m *mockECRClient) CompleteLayerUpload(ctx context.Context, params *ecr.Com
 	return nil, errors.New("completeLayerUploadFunc not set")
 }
 
+func (m *mockECRClient) CreateRepository(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
+	if m.createRepositoryFunc != nil {
+		return m.createRepositoryFunc(ctx, params, optFns...)
+	}
+	return nil, errors.New("createRepositoryFunc not set")
+}
+
+func (m *mockECRClient) DescribeRepositories(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error) {
+	if m.describeRepositoriesFunc != nil {
+		return m.describeRepositoriesFunc(ctx, params, optFns...)
+	}
+	// Default: repository exists
+	return &ecr.DescribeRepositoriesOutput{
+		Repositories: []ecrtypes.Repository{
+			{RepositoryName: aws.String(params.RepositoryNames[0])},
+		},
+	}, nil
+}
+
 type mockECRClientFactory struct {
 	createClientFunc func(ctx context.Context, targetAccount, targetRegion string) (ECRClient, error)
 }
@@ -117,9 +138,9 @@ func testContext() context.Context {
 	return logger.WithContext(context.Background())
 }
 
-// Helper to create S3 response with manifest JSON
-func s3ManifestResponse(manifest DeployManifest) *s3.GetObjectOutput {
-	data, _ := json.Marshal(manifest)
+// Helper to create S3 response with container-images.json
+func s3ContainerImagesResponse(images ContainerImages) *s3.GetObjectOutput {
+	data, _ := json.Marshal(images)
 	return &s3.GetObjectOutput{
 		Body: io.NopCloser(bytes.NewReader(data)),
 	}
@@ -158,7 +179,7 @@ func TestHandlePromoteImages_NoManifest(t *testing.T) {
 func TestHandlePromoteImages_EmptyManifest(t *testing.T) {
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(DeployManifest{Images: []ImageSpec{}}), nil
+			return s3ContainerImagesResponse(ContainerImages{Images: []ContainerImage{}}), nil
 		},
 	}
 
@@ -181,15 +202,15 @@ func TestHandlePromoteImages_EmptyManifest(t *testing.T) {
 }
 
 func TestHandlePromoteImages_Success_SingleImage(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -234,17 +255,17 @@ func TestHandlePromoteImages_Success_SingleImage(t *testing.T) {
 }
 
 func TestHandlePromoteImages_Success_MultipleImages(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
-			{Repository: "myapp/worker", Tag: "1.0.0"},
-			{Repository: "myapp/scheduler", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
+			{Name: "worker", Registry: "myapp/worker", Tag: "1.0.0"},
+			{Name: "scheduler", Registry: "myapp/scheduler", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -280,15 +301,15 @@ func TestHandlePromoteImages_Success_MultipleImages(t *testing.T) {
 }
 
 func TestHandlePromoteImages_CrossAccount(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -367,8 +388,8 @@ func TestHandlePromoteImages_S3Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for S3 failure")
 	}
-	if !strings.Contains(err.Error(), "failed to download manifest") {
-		t.Errorf("expected 'failed to download manifest' error, got: %v", err)
+	if !strings.Contains(err.Error(), "failed to download container-images.json") {
+		t.Errorf("expected 'failed to download container-images.json' error, got: %v", err)
 	}
 }
 
@@ -394,21 +415,21 @@ func TestHandlePromoteImages_InvalidManifestJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
-	if !strings.Contains(err.Error(), "failed to parse manifest JSON") {
-		t.Errorf("expected 'failed to parse manifest JSON' error, got: %v", err)
+	if !strings.Contains(err.Error(), "failed to parse container-images.json") {
+		t.Errorf("expected 'failed to parse container-images.json' error, got: %v", err)
 	}
 }
 
 func TestHandlePromoteImages_ECRGetImageError(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -437,15 +458,15 @@ func TestHandlePromoteImages_ECRGetImageError(t *testing.T) {
 }
 
 func TestHandlePromoteImages_SourceImageNotFound(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "nonexistent"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "nonexistent"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -476,15 +497,15 @@ func TestHandlePromoteImages_SourceImageNotFound(t *testing.T) {
 }
 
 func TestHandlePromoteImages_ECRPutImageError(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -520,15 +541,15 @@ func TestHandlePromoteImages_ECRPutImageError(t *testing.T) {
 }
 
 func TestHandlePromoteImages_ImageAlreadyExists(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -565,15 +586,15 @@ func TestHandlePromoteImages_ImageAlreadyExists(t *testing.T) {
 }
 
 func TestHandlePromoteImages_FactoryError(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -603,15 +624,15 @@ func TestHandlePromoteImages_FactoryError(t *testing.T) {
 }
 
 func TestHandlePromoteImages_EmptyRepository(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "", Tag: "1.0.0"}, // Empty repository
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "", Tag: "1.0.0"}, // Empty registry
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -636,15 +657,15 @@ func TestHandlePromoteImages_EmptyRepository(t *testing.T) {
 }
 
 func TestHandlePromoteImages_EmptyTag(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: ""}, // Empty tag
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: ""}, // Empty tag
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -669,15 +690,15 @@ func TestHandlePromoteImages_EmptyTag(t *testing.T) {
 }
 
 func TestHandlePromoteImages_NilManifest(t *testing.T) {
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -718,24 +739,24 @@ func (e *mockNoSuchKeyError) Error() string {
 
 // Tests for data structures (existing tests, kept for coverage)
 
-func TestDeployManifestParsing(t *testing.T) {
+func TestContainerImagesParsing(t *testing.T) {
 	tests := []struct {
 		name       string
 		jsonData   string
 		wantCount  int
-		wantImages []ImageSpec
+		wantImages []ContainerImage
 		wantErr    bool
 	}{
 		{
 			name: "single image",
 			jsonData: `{
 				"images": [
-					{"repository": "myapp/api", "tag": "1.0.0-abc123"}
+					{"name": "api", "registry": "myapp/api", "tag": "1.0.0-abc123"}
 				]
 			}`,
 			wantCount: 1,
-			wantImages: []ImageSpec{
-				{Repository: "myapp/api", Tag: "1.0.0-abc123"},
+			wantImages: []ContainerImage{
+				{Name: "api", Registry: "myapp/api", Tag: "1.0.0-abc123"},
 			},
 			wantErr: false,
 		},
@@ -743,16 +764,16 @@ func TestDeployManifestParsing(t *testing.T) {
 			name: "multiple images",
 			jsonData: `{
 				"images": [
-					{"repository": "myapp/api", "tag": "1.0.0"},
-					{"repository": "myapp/worker", "tag": "1.0.0"},
-					{"repository": "myapp/scheduler", "tag": "1.0.0"}
+					{"name": "api", "registry": "myapp/api", "tag": "1.0.0"},
+					{"name": "worker", "registry": "myapp/worker", "tag": "1.0.0"},
+					{"name": "scheduler", "registry": "myapp/scheduler", "tag": "1.0.0"}
 				]
 			}`,
 			wantCount: 3,
-			wantImages: []ImageSpec{
-				{Repository: "myapp/api", Tag: "1.0.0"},
-				{Repository: "myapp/worker", Tag: "1.0.0"},
-				{Repository: "myapp/scheduler", Tag: "1.0.0"},
+			wantImages: []ContainerImage{
+				{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
+				{Name: "worker", Registry: "myapp/worker", Tag: "1.0.0"},
+				{Name: "scheduler", Registry: "myapp/scheduler", Tag: "1.0.0"},
 			},
 			wantErr: false,
 		},
@@ -760,7 +781,7 @@ func TestDeployManifestParsing(t *testing.T) {
 			name:       "empty images array",
 			jsonData:   `{"images": []}`,
 			wantCount:  0,
-			wantImages: []ImageSpec{},
+			wantImages: []ContainerImage{},
 			wantErr:    false,
 		},
 		{
@@ -775,12 +796,39 @@ func TestDeployManifestParsing(t *testing.T) {
 			wantImages: nil,
 			wantErr:    false,
 		},
+		{
+			name: "full container-images.json format",
+			jsonData: `{
+				"images": [
+					{
+						"name": "echo",
+						"registry": "deployer-test/echo",
+						"tag": "14.0d3f85",
+						"digest": "sha256:1d8aa5d4ed2f070dd32cfdde7758a394f3051456eeed6668ef468b663c5f8738",
+						"signed": false,
+						"parameterName": "EchoImageUri"
+					}
+				]
+			}`,
+			wantCount: 1,
+			wantImages: []ContainerImage{
+				{
+					Name:          "echo",
+					Registry:      "deployer-test/echo",
+					Tag:           "14.0d3f85",
+					Digest:        "sha256:1d8aa5d4ed2f070dd32cfdde7758a394f3051456eeed6668ef468b663c5f8738",
+					Signed:        false,
+					ParameterName: "EchoImageUri",
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var manifest DeployManifest
-			err := json.Unmarshal([]byte(tt.jsonData), &manifest)
+			var containerImages ContainerImages
+			err := json.Unmarshal([]byte(tt.jsonData), &containerImages)
 
 			if tt.wantErr {
 				if err == nil {
@@ -793,17 +841,17 @@ func TestDeployManifestParsing(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if len(manifest.Images) != tt.wantCount {
-				t.Errorf("len(images) = %d, want %d", len(manifest.Images), tt.wantCount)
+			if len(containerImages.Images) != tt.wantCount {
+				t.Errorf("len(images) = %d, want %d", len(containerImages.Images), tt.wantCount)
 			}
 
 			for i, want := range tt.wantImages {
-				if i >= len(manifest.Images) {
+				if i >= len(containerImages.Images) {
 					break
 				}
-				got := manifest.Images[i]
-				if got.Repository != want.Repository {
-					t.Errorf("images[%d].Repository = %q, want %q", i, got.Repository, want.Repository)
+				got := containerImages.Images[i]
+				if got.Registry != want.Registry {
+					t.Errorf("images[%d].Registry = %q, want %q", i, got.Registry, want.Registry)
 				}
 				if got.Tag != want.Tag {
 					t.Errorf("images[%d].Tag = %q, want %q", i, got.Tag, want.Tag)
@@ -813,7 +861,27 @@ func TestDeployManifestParsing(t *testing.T) {
 	}
 }
 
-func TestManifestKeyGeneration(t *testing.T) {
+func TestContainerImageToImageSpec(t *testing.T) {
+	ci := ContainerImage{
+		Name:          "echo",
+		Registry:      "deployer-test/echo",
+		Tag:           "14.0d3f85",
+		Digest:        "sha256:abc123",
+		Signed:        false,
+		ParameterName: "EchoImageUri",
+	}
+
+	spec := ci.ToImageSpec()
+
+	if spec.Repository != "deployer-test/echo" {
+		t.Errorf("Repository = %q, want %q", spec.Repository, "deployer-test/echo")
+	}
+	if spec.Tag != "14.0d3f85" {
+		t.Errorf("Tag = %q, want %q", spec.Tag, "14.0d3f85")
+	}
+}
+
+func TestContainerImagesKeyGeneration(t *testing.T) {
 	tests := []struct {
 		name        string
 		s3Key       string
@@ -822,27 +890,27 @@ func TestManifestKeyGeneration(t *testing.T) {
 		{
 			name:        "simple path",
 			s3Key:       "myapp/main/1.2.3",
-			wantKeyPath: "myapp/main/1.2.3/deploy-manifest.json",
+			wantKeyPath: "myapp/main/1.2.3/container-images.json",
 		},
 		{
 			name:        "path with trailing slash",
 			s3Key:       "myapp/main/1.2.3/",
-			wantKeyPath: "myapp/main/1.2.3/deploy-manifest.json",
+			wantKeyPath: "myapp/main/1.2.3/container-images.json",
 		},
 		{
 			name:        "nested path",
 			s3Key:       "org/repo/feature/2.0.0",
-			wantKeyPath: "org/repo/feature/2.0.0/deploy-manifest.json",
+			wantKeyPath: "org/repo/feature/2.0.0/container-images.json",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			keyPrefix := strings.TrimRight(tt.s3Key, "/")
-			manifestKey := fmt.Sprintf("%s/deploy-manifest.json", keyPrefix)
+			containerImagesKey := fmt.Sprintf("%s/container-images.json", keyPrefix)
 
-			if manifestKey != tt.wantKeyPath {
-				t.Errorf("manifestKey = %q, want %q", manifestKey, tt.wantKeyPath)
+			if containerImagesKey != tt.wantKeyPath {
+				t.Errorf("containerImagesKey = %q, want %q", containerImagesKey, tt.wantKeyPath)
 			}
 		})
 	}
@@ -1085,26 +1153,31 @@ func TestCalculateDigest(t *testing.T) {
 }
 
 func TestHandlePromoteImages_CrossAccount_WithLayerCopy(t *testing.T) {
-	// Test cross-account promotion with layer copy
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	// Test cross-account promotion with layer copy using streaming
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
-	// Docker manifest with config and layers
-	dockerManifest := `{
+	// Mock layer data and its real SHA256 digest
+	// sha256("test layer content") = 47b353ad39d8e...
+	layerData := []byte("test layer content")
+	layerDigest := calculateDigest(layerData)
+
+	// Docker manifest with config and layers using the real digest
+	dockerManifest := fmt.Sprintf(`{
 		"schemaVersion": 2,
-		"config": {"digest": "sha256:config123"},
+		"config": {"digest": "%s"},
 		"layers": [
-			{"digest": "sha256:layer1"},
-			{"digest": "sha256:layer2"}
+			{"digest": "%s"},
+			{"digest": "%s"}
 		]
-	}`
+	}`, layerDigest, layerDigest, layerDigest)
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -1161,9 +1234,10 @@ func TestHandlePromoteImages_CrossAccount_WithLayerCopy(t *testing.T) {
 
 	httpClient := &mockHTTPClient{
 		doFunc: func(req *http.Request) (*http.Response, error) {
+			// Return the same layer data that matches the digest in the manifest
 			return &http.Response{
 				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewReader([]byte("layer data"))),
+				Body:       io.NopCloser(bytes.NewReader(layerData)),
 			}, nil
 		},
 	}
@@ -1186,7 +1260,8 @@ func TestHandlePromoteImages_CrossAccount_WithLayerCopy(t *testing.T) {
 	if output.ImagesPromoted != 1 {
 		t.Errorf("expected ImagesPromoted=1, got %d", output.ImagesPromoted)
 	}
-	// Verify layers were uploaded (3 layers: config + 2 layers)
+	// The manifest has 3 references (config + 2 layers) using the same digest.
+	// Each is processed separately (future optimization: deduplicate digests).
 	if layerUploadCount != 3 {
 		t.Errorf("expected 3 layers uploaded, got %d", layerUploadCount)
 	}
@@ -1194,9 +1269,9 @@ func TestHandlePromoteImages_CrossAccount_WithLayerCopy(t *testing.T) {
 
 func TestHandlePromoteImages_CrossAccount_LayersAlreadyExist(t *testing.T) {
 	// Test cross-account promotion when layers already exist in target
-	manifest := DeployManifest{
-		Images: []ImageSpec{
-			{Repository: "myapp/api", Tag: "1.0.0"},
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
 		},
 	}
 
@@ -1208,7 +1283,7 @@ func TestHandlePromoteImages_CrossAccount_LayersAlreadyExist(t *testing.T) {
 
 	s3Client := &mockS3Client{
 		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-			return s3ManifestResponse(manifest), nil
+			return s3ContainerImagesResponse(containerImages), nil
 		},
 	}
 
@@ -1261,5 +1336,173 @@ func TestHandlePromoteImages_CrossAccount_LayersAlreadyExist(t *testing.T) {
 	}
 	if output.ImagesPromoted != 1 {
 		t.Errorf("expected ImagesPromoted=1, got %d", output.ImagesPromoted)
+	}
+}
+
+func TestHandlePromoteImages_RepositoryDoesNotExist_CreatesIt(t *testing.T) {
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
+		},
+	}
+
+	s3Client := &mockS3Client{
+		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+			return s3ContainerImagesResponse(containerImages), nil
+		},
+	}
+
+	repoCreated := false
+	ecrClient := &mockECRClient{
+		batchGetImageFunc: func(ctx context.Context, params *ecr.BatchGetImageInput, optFns ...func(*ecr.Options)) (*ecr.BatchGetImageOutput, error) {
+			return &ecr.BatchGetImageOutput{
+				Images: []ecrtypes.Image{
+					{ImageManifest: aws.String(`{"config":{}}`)},
+				},
+			}, nil
+		},
+		describeRepositoriesFunc: func(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error) {
+			// Repository doesn't exist
+			return nil, &ecrtypes.RepositoryNotFoundException{Message: aws.String("repository not found")}
+		},
+		createRepositoryFunc: func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
+			repoCreated = true
+			// Verify settings
+			if params.ImageTagMutability != ecrtypes.ImageTagMutabilityImmutable {
+				t.Error("expected ImageTagMutability to be IMMUTABLE")
+			}
+			if params.ImageScanningConfiguration == nil || !params.ImageScanningConfiguration.ScanOnPush {
+				t.Error("expected ScanOnPush to be true")
+			}
+			return &ecr.CreateRepositoryOutput{
+				Repository: &ecrtypes.Repository{
+					RepositoryName: params.RepositoryName,
+				},
+			}, nil
+		},
+		putImageFunc: func(ctx context.Context, params *ecr.PutImageInput, optFns ...func(*ecr.Options)) (*ecr.PutImageOutput, error) {
+			return &ecr.PutImageOutput{}, nil
+		},
+	}
+
+	handler := NewHandlerWithDeps(s3Client, ecrClient, nil, nil, "us-east-1")
+
+	output, err := handler.HandlePromoteImages(testContext(), &Input{
+		Env:      "dev",
+		Repo:     "myapp",
+		SK:       "abc123",
+		S3Bucket: "bucket",
+		S3Key:    "myapp/main/1.0.0",
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !repoCreated {
+		t.Error("expected repository to be created")
+	}
+	if output.ImagesPromoted != 1 {
+		t.Errorf("expected ImagesPromoted=1, got %d", output.ImagesPromoted)
+	}
+}
+
+func TestHandlePromoteImages_RepositoryCreationRaceCondition(t *testing.T) {
+	// Test that we handle RepositoryAlreadyExistsException gracefully
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
+		},
+	}
+
+	s3Client := &mockS3Client{
+		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+			return s3ContainerImagesResponse(containerImages), nil
+		},
+	}
+
+	ecrClient := &mockECRClient{
+		batchGetImageFunc: func(ctx context.Context, params *ecr.BatchGetImageInput, optFns ...func(*ecr.Options)) (*ecr.BatchGetImageOutput, error) {
+			return &ecr.BatchGetImageOutput{
+				Images: []ecrtypes.Image{
+					{ImageManifest: aws.String(`{"config":{}}`)},
+				},
+			}, nil
+		},
+		describeRepositoriesFunc: func(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error) {
+			// Repository doesn't exist
+			return nil, &ecrtypes.RepositoryNotFoundException{Message: aws.String("repository not found")}
+		},
+		createRepositoryFunc: func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
+			// Race condition - another process created the repo
+			return nil, &ecrtypes.RepositoryAlreadyExistsException{Message: aws.String("repository already exists")}
+		},
+		putImageFunc: func(ctx context.Context, params *ecr.PutImageInput, optFns ...func(*ecr.Options)) (*ecr.PutImageOutput, error) {
+			return &ecr.PutImageOutput{}, nil
+		},
+	}
+
+	handler := NewHandlerWithDeps(s3Client, ecrClient, nil, nil, "us-east-1")
+
+	output, err := handler.HandlePromoteImages(testContext(), &Input{
+		Env:      "dev",
+		Repo:     "myapp",
+		SK:       "abc123",
+		S3Bucket: "bucket",
+		S3Key:    "myapp/main/1.0.0",
+	})
+
+	// Should succeed even with race condition
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.ImagesPromoted != 1 {
+		t.Errorf("expected ImagesPromoted=1, got %d", output.ImagesPromoted)
+	}
+}
+
+func TestHandlePromoteImages_RepositoryCreateError(t *testing.T) {
+	containerImages := ContainerImages{
+		Images: []ContainerImage{
+			{Name: "api", Registry: "myapp/api", Tag: "1.0.0"},
+		},
+	}
+
+	s3Client := &mockS3Client{
+		getObjectFunc: func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+			return s3ContainerImagesResponse(containerImages), nil
+		},
+	}
+
+	ecrClient := &mockECRClient{
+		batchGetImageFunc: func(ctx context.Context, params *ecr.BatchGetImageInput, optFns ...func(*ecr.Options)) (*ecr.BatchGetImageOutput, error) {
+			return &ecr.BatchGetImageOutput{
+				Images: []ecrtypes.Image{
+					{ImageManifest: aws.String(`{"config":{}}`)},
+				},
+			}, nil
+		},
+		describeRepositoriesFunc: func(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error) {
+			return nil, &ecrtypes.RepositoryNotFoundException{Message: aws.String("repository not found")}
+		},
+		createRepositoryFunc: func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
+			return nil, errors.New("access denied")
+		},
+	}
+
+	handler := NewHandlerWithDeps(s3Client, ecrClient, nil, nil, "us-east-1")
+
+	_, err := handler.HandlePromoteImages(testContext(), &Input{
+		Env:      "dev",
+		Repo:     "myapp",
+		SK:       "abc123",
+		S3Bucket: "bucket",
+		S3Key:    "myapp/main/1.0.0",
+	})
+
+	if err == nil {
+		t.Fatal("expected error for repository creation failure")
+	}
+	if !strings.Contains(err.Error(), "failed to create repository") {
+		t.Errorf("expected 'failed to create repository' error, got: %v", err)
 	}
 }

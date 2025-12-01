@@ -90,28 +90,13 @@ func (h *Handler) HandleDeployCloudFormation(
 	logger.Info().Msg("Step 1: Downloading S3 content")
 	prefix := strings.TrimRight(input.S3Key, "/") + "/"
 
-	// Determine template and params filenames based on template name
-	// Main: cloudformation.template, cloudformation-params.json
-	// Sub:  cloudformation-{name}.template, cloudformation-{name}-params.json
-	templateFile := "cloudformation.template"
-	paramsFile := "cloudformation-params.json"
-	if input.TemplateName != "" {
-		templateFile = fmt.Sprintf("cloudformation-%s.template", input.TemplateName)
-		paramsFile = fmt.Sprintf("cloudformation-%s-params.json", input.TemplateName)
-		logger.Info().
-			Str("template_name", input.TemplateName).
-			Str("template_file", templateFile).
-			Str("params_file", paramsFile).
-			Msg("Using sub-template files")
-	}
-
-	template, err := h.downloadCloudFormationTemplate(ctx, input.S3Bucket, prefix+templateFile)
+	template, err := h.downloadCloudFormationTemplate(ctx, input.S3Bucket, prefix+"cloudformation.template")
 	if err != nil {
 		return nil, fmt.Errorf("failed to download CloudFormation template: %w", err)
 	}
 
 	// Download and merge base + env-specific parameters
-	params, err := h.downloadAndParseParams(ctx, input.S3Bucket, prefix+paramsFile, input.Env, input.TemplateName)
+	params, err := h.downloadAndParseParams(ctx, input.S3Bucket, prefix+"cloudformation-params.json", input.Env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download and parse params: %w", err)
 	}
@@ -141,23 +126,11 @@ func (h *Handler) HandleDeployCloudFormation(
 	// Step 3: Deploy CloudFormation stack
 	logger.Info().Msg("Step 3: Deploying CloudFormation stack")
 
-	// Determine base repo for stack name (Repo may contain ":" for sub-templates which isn't allowed in stack names)
-	baseRepo := input.BaseRepo
-	if baseRepo == "" {
-		baseRepo = input.Repo
-	}
-
-	// Stack name: {env}-{repo} for main, {env}-{repo}-{template} for sub-templates
-	stackName := fmt.Sprintf("%s-%s", input.Env, baseRepo)
-	if input.TemplateName != "" {
-		stackName = fmt.Sprintf("%s-%s-%s", input.Env, baseRepo, input.TemplateName)
-	}
+	stackName := fmt.Sprintf("%s-%s", input.Env, input.Repo)
 
 	logger.Info().
 		Str("stack_name", stackName).
 		Str("repo", input.Repo).
-		Str("base_repo", baseRepo).
-		Str("template_name", input.TemplateName).
 		Str("version", input.Version).
 		Msg("Deploying stack")
 
@@ -275,14 +248,13 @@ func (h *Handler) updateStack(
 	}, nil
 }
 
-func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env, templateName string) ([]types.Parameter, error) {
+func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env string) ([]types.Parameter, error) {
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
 		Str("bucket", bucket).
 		Str("key", key).
 		Str("env", env).
-		Str("template_name", templateName).
 		Msg("Downloading and parsing parameters")
 
 	defer func() {
@@ -292,7 +264,7 @@ func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env, 
 			Msg("Finished downloading parameters")
 	}()
 
-	// Download base parameters (cloudformation-params.json or cloudformation-{name}-params.json)
+	// Download base parameters (cloudformation-params.json)
 	content, err := h.downloadS3Object(ctx, bucket, key)
 	if err != nil {
 		return nil, err
@@ -303,15 +275,8 @@ func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env, 
 		return nil, fmt.Errorf("failed to parse JSON parameters: %w", err)
 	}
 
-	// Try to download env-specific parameters
-	// Main: cloudformation-params.{env}.json
-	// Sub:  cloudformation-{name}-params.{env}.json
-	var envFilename string
-	if templateName != "" {
-		envFilename = fmt.Sprintf("cloudformation-%s-params.%s.json", templateName, env)
-	} else {
-		envFilename = fmt.Sprintf("cloudformation-params.%s.json", env)
-	}
+	// Try to download env-specific parameters (cloudformation-params.{env}.json)
+	envFilename := fmt.Sprintf("cloudformation-params.%s.json", env)
 	envKey := replaceFilename(key, envFilename)
 	envContent, err := h.downloadS3Object(ctx, bucket, envKey)
 	if err != nil {

@@ -118,14 +118,14 @@ go run internal/lambda/server/main.go serve --disable-ssm --disable-auth
 
 The system consists of the following components:
 
-1. **S3 Trigger Lambda**: Monitors S3 bucket for params files (`cloudformation-params.json` or `cloudformation-{name}-params.json`) and creates build records
+1. **S3 Trigger Lambda**: Monitors S3 bucket for `cloudformation-params.json` and creates build records
 2. **Trigger Build Lambda**: Listens to DynamoDB streams and starts Step Function executions for new builds
 3. **Step Function**: Orchestrates the deployment workflow with the following steps:
     - Deploy CloudFormation stack (includes S3 download, status update, and deployment)
     - Monitor stack status until completion
-4. **DynamoDB Table**: Tracks build status and metadata (supports both main and sub-template deployments)
+4. **DynamoDB Table**: Tracks build status and metadata
 5. **Lambda Functions**:
-    - `deploy-cloudformation`: Downloads S3 content, updates build status, and deploys stack (selects appropriate template/params files based on `template_name`)
+    - `deploy-cloudformation`: Downloads S3 content, updates build status, and deploys stack
     - `check-stack-status`: Monitors CloudFormation stack progress
     - `update-build-status`: Updates build status in DynamoDB
 
@@ -146,17 +146,14 @@ Policy rules are still defined in `internal/policy/cloudformation.rego` for when
 
 ## Workflow
 
-1. When a params file is uploaded to `s3://lmvtfy-github-artifacts/{repo}/{branch}/{version}/`, it triggers the S3 Lambda:
-   - `cloudformation-params.json` triggers the main template deployment
-   - `cloudformation-{name}-params.json` triggers a sub-template deployment (e.g., `cloudformation-worker-params.json`)
+1. When `cloudformation-params.json` is uploaded to `s3://lmvtfy-github-artifacts/{repo}/{branch}/{version}/`, it triggers the S3 Lambda
 2. The S3 Lambda:
     - Parses the S3 path to extract repo, branch, and version information
-    - For sub-templates, extracts the template name and creates repo as `{base-repo}:{template}` (e.g., `myapp:worker`)
     - Generates a new KSUID for the build
     - Creates a build record in DynamoDB with status `PENDING`
 3. DynamoDB Stream triggers the trigger-build Lambda which starts a Step Function execution
 4. The Step Function calls the `deploy-cloudformation` Lambda which:
-    - Downloads the appropriate template and params files from S3
+    - Downloads the template and params files from S3
     - Updates build status to `IN_PROGRESS` in DynamoDB
     - Creates or updates the CloudFormation stack
 5. Stack deployment is monitored every 15 seconds until completion or failure
@@ -166,30 +163,11 @@ Policy rules are still defined in `internal/policy/cloudformation.rego` for when
 
 ```
 s3://lmvtfy-github-artifacts/{repo}/{branch}/{version}/
-├── cloudformation-params.json           # Parameters for main template
+├── cloudformation-params.json           # Parameters (triggers deployment)
 ├── cloudformation-params.{env}.json     # Environment-specific overrides (optional)
-├── cloudformation.template              # Main CloudFormation template
-├── cloudformation-worker-params.json    # Parameters for "worker" sub-template (optional)
-├── cloudformation-worker-params.{env}.json  # Environment overrides for sub-template (optional)
-├── cloudformation-worker.template       # Sub-template for "worker" (optional)
-└── ... (other files and sub-templates)
+├── cloudformation.template              # CloudFormation template
+└── container-images.json                # Docker images to promote (optional)
 ```
-
-### Multi-Template Support
-
-A single repository can deploy multiple CloudFormation templates by following this naming convention:
-
-| File | Description |
-|------|-------------|
-| `cloudformation.template` | Main template (required) |
-| `cloudformation-params.json` | Main template parameters |
-| `cloudformation-{name}.template` | Sub-template (e.g., `cloudformation-worker.template`) |
-| `cloudformation-{name}-params.json` | Sub-template parameters |
-| `cloudformation-{name}-params.{env}.json` | Sub-template environment overrides |
-
-Each params file upload triggers an independent deployment:
-- Uploading `cloudformation-params.json` deploys the main template
-- Uploading `cloudformation-worker-params.json` deploys the worker sub-template
 
 ### Version Format
 
@@ -205,19 +183,18 @@ The DynamoDB table `dev-aws-deployer--builds` stores build information with a co
 
 Build IDs follow the format: `{repo}/{env}:{ksuid}`
 
-**Main template example:** `my-app/dev:2HFj3kLmNoPqRsTuVwXy`
-**Sub-template example:** `my-app:worker/dev:2HFj3kLmNoPqRsTuVwXy`
+**Example:** `my-app/dev:2HFj3kLmNoPqRsTuVwXy`
 
-- `{repo}`: Repository name, includes template suffix for sub-templates (e.g., `my-app` or `my-app:worker`)
+- `{repo}`: Repository name (e.g., `my-app`)
 - `{env}`: Environment name (e.g., `dev`, `staging`, `prod`)
 - `{ksuid}`: K-Sortable Unique Identifier (chronologically sortable unique ID)
 
 ### DynamoDB Table Structure
 
-- **Primary Key (pk)**: `{repo}/{env}` (e.g., `my-app/dev` or `my-app:worker/dev` for sub-templates)
+- **Primary Key (pk)**: `{repo}/{env}` (e.g., `my-app/dev`)
 - **Sort Key (sk)**: KSUID (e.g., `2HFj3kLmNoPqRsTuVwXy`)
 - **Attributes**:
-    - `repo`: Repository name (includes template suffix for sub-templates, e.g., `my-app:worker`)
+    - `repo`: Repository name
     - `env`: Environment name
     - `build_number`: Build number from version (original value, not KSUID)
     - `branch`: Git branch name
@@ -228,8 +205,6 @@ Build IDs follow the format: `{repo}/{env}:{ksuid}`
     - `start_time`: Build start timestamp
     - `end_time`: Build end timestamp (optional)
     - `error_msg`: Error message for failed builds (optional)
-    - `template_name`: Sub-template name (empty for main template)
-    - `base_repo`: Original repository name without template suffix
 
 ### Build Statuses
 
@@ -522,18 +497,13 @@ make clean
 
 ## Stack Naming Convention
 
-CloudFormation stacks are named using these patterns:
-
-**Main template:** `{env}-{repo}`
-**Sub-template:** `{env}-{repo}-{template}`
+CloudFormation stacks are named using the pattern: `{env}-{repo}`
 
 Examples:
 
-- `dev-my-app` (main template for repo "my-app" in dev)
-- `dev-my-app-worker` (sub-template "worker" for repo "my-app" in dev)
-- `prod-api-service` (main template for repo "api-service" in prod)
-- `prod-api-service-scheduler` (sub-template "scheduler" for repo "api-service" in prod)
+- `dev-my-app` (repo "my-app" in dev)
+- `prod-api-service` (repo "api-service" in prod)
 
-Step Function execution names follow similar patterns but replace colons with dashes:
-- Main: `my-app-dev-{ksuid}`
-- Sub-template: `my-app-worker-dev-{ksuid}` (from repo `my-app:worker`)
+Step Function execution names follow the pattern: `{repo}-{env}-{ksuid}`
+
+Example: `my-app-dev-2HFj3kLmNoPqRsTuVwXy`

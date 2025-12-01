@@ -46,15 +46,14 @@ func (id ID) String() string {
 }
 
 // ParseID parses a build ID into its partition key (pk) and sort key (sk) components
-// The ID format is {pk}:{sk} where pk may contain colons (for sub-templates like "myapp:worker/dev")
-// We split on the LAST colon since KSUID sort keys don't contain colons
+// The ID format is {pk}:{sk} where pk is {repo}/{env} and sk is the KSUID
 func ParseID(id ID) (pk PK, sk string, err error) {
 	s := string(id)
-	lastColon := strings.LastIndex(s, ":")
-	if lastColon == -1 {
+	idx := strings.Index(s, ":")
+	if idx == -1 {
 		return "", "", fmt.Errorf("invalid build ID format: %s, expected {repo}/{env}:{ksuid}", s)
 	}
-	return PK(s[:lastColon]), s[lastColon+1:], nil
+	return PK(s[:idx]), s[idx+1:], nil
 }
 
 // NewID constructs an ID from partition key and sort key
@@ -74,12 +73,12 @@ const (
 
 // Record represents a deployment build record in DynamoDB
 type Record struct {
-	PK           PK          `ddb:"hash" dynamodbav:"pk"`          // {repo}/{env} or {repo}:{template}/{env} - DynamoDB partition key
-	SK           string      `ddb:"range" dynamodbav:"sk"`         // KSUID - DynamoDB sort key
-	ID           ID          `dynamodbav:"id,omitempty"`           // ID is only used for latest entries
-	Repo         string      `dynamodbav:"repo,omitempty"`         // Repository name (includes template suffix for sub-templates, e.g., "myapp:worker")
-	Env          string      `dynamodbav:"env,omitempty"`          // Environment name (dev, staging, prod)
-	BuildNumber  string      `dynamodbav:"build_number,omitempty"` // Build number from version
+	PK           PK          `ddb:"hash" dynamodbav:"pk"`                   // {repo}/{env} - DynamoDB partition key
+	SK           string      `ddb:"range" dynamodbav:"sk"`                  // KSUID - DynamoDB sort key
+	ID           ID          `dynamodbav:"id,omitempty"`                    // ID is only used for latest entries
+	Repo         string      `dynamodbav:"repo,omitempty"`                  // Repository name
+	Env          string      `dynamodbav:"env,omitempty"`                   // Environment name (dev, staging, prod)
+	BuildNumber  string      `dynamodbav:"build_number,omitempty"`          // Build number from version
 	Branch       string      `dynamodbav:"branch,omitempty"`
 	Version      string      `dynamodbav:"version,omitempty"`
 	CommitHash   string      `dynamodbav:"commit_hash,omitempty"`
@@ -90,8 +89,6 @@ type Record struct {
 	CreatedAt    int64       `dynamodbav:"created_at,omitempty"`            // Unix epoch timestamp of creation
 	FinishedAt   *int64      `dynamodbav:"finished_at,omitempty,omitempty"` // Unix epoch timestamp of completion
 	UpdatedAt    int64       `dynamodbav:"updated_at,omitempty"`            // Unix epoch timestamp of last update
-	TemplateName string      `dynamodbav:"template_name,omitempty"`         // Template name for sub-templates (empty for main template)
-	BaseRepo     string      `dynamodbav:"base_repo,omitempty"`             // Original repo name without template suffix
 }
 
 // GetID returns the full build ID in format: {repo}/{env}:{ksuid}
@@ -104,16 +101,14 @@ func (r *Record) GetID() ID {
 
 // CreateInput contains the fields needed to create a new build record
 type CreateInput struct {
-	Repo         string // Repository name (includes template suffix for sub-templates, e.g., "myapp:worker")
-	Env          string // Environment (dev, staging, prod)
-	SK           string // KSUID sort key
-	BuildNumber  string // Build number from version
-	Branch       string // Git branch
-	Version      string // Version string
-	CommitHash   string // Git commit hash
-	StackName    string // CloudFormation stack name
-	TemplateName string // Template name for sub-templates (empty for main template)
-	BaseRepo     string // Original repo name without template suffix
+	Repo        string // Repository name
+	Env         string // Environment (dev, staging, prod)
+	SK          string // KSUID sort key
+	BuildNumber string // Build number from version
+	Branch      string // Git branch
+	Version     string // Version string
+	CommitHash  string // Git commit hash
+	StackName   string // CloudFormation stack name
 }
 
 // UpdateInput contains the fields that can be updated on a build record
@@ -146,20 +141,18 @@ func (d *DAO) Create(ctx context.Context, input CreateInput) (Record, error) {
 	now := time.Now().Unix()
 
 	record := Record{
-		PK:           pk,
-		SK:           input.SK,
-		Repo:         input.Repo,
-		Env:          input.Env,
-		BuildNumber:  input.BuildNumber,
-		Branch:       input.Branch,
-		Version:      input.Version,
-		CommitHash:   input.CommitHash,
-		Status:       BuildStatusPending,
-		StackName:    input.StackName,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		TemplateName: input.TemplateName,
-		BaseRepo:     input.BaseRepo,
+		PK:          pk,
+		SK:          input.SK,
+		Repo:        input.Repo,
+		Env:         input.Env,
+		BuildNumber: input.BuildNumber,
+		Branch:      input.Branch,
+		Version:     input.Version,
+		CommitHash:  input.CommitHash,
+		Status:      BuildStatusPending,
+		StackName:   input.StackName,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	err := d.table.Put(&record).RunWithContext(ctx)
