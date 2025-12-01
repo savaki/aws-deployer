@@ -11,7 +11,7 @@ GOMOD=$(GOCMD) mod
 # Build parameters
 BINARY_NAME=bootstrap
 BUILD_DIR=build
-LAMBDA_FUNCTIONS=s3-trigger trigger-build verify-signatures deploy-cloudformation check-stack-status update-build-status server rotator
+LAMBDA_FUNCTIONS=s3-trigger trigger-build deploy-cloudformation check-stack-status update-build-status promote-images server rotator
 MULTI_ACCOUNT_FUNCTIONS=acquire-lock fetch-targets initialize-deployments create-stackset deploy-stack-instances check-stackset-status aggregate-results release-lock
 
 # AWS parameters
@@ -56,10 +56,6 @@ build: clean
 	@cd $(BUILD_DIR)/trigger-build && zip -r ../trigger-build.zip .
 
 	# Build step function Lambda functions
-	@echo "Building verify-signatures..."
-	@cd internal/lambda/step-functions/verify-signatures && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../../$(BUILD_DIR)/verify-signatures/$(BINARY_NAME) .
-	@cd $(BUILD_DIR)/verify-signatures && zip -r ../verify-signatures.zip .
-
 	@echo "Building deploy-cloudformation..."
 	@cd internal/lambda/step-functions/deploy-cloudformation && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../../$(BUILD_DIR)/deploy-cloudformation/$(BINARY_NAME) .
 	@cd $(BUILD_DIR)/deploy-cloudformation && zip -r ../deploy-cloudformation.zip .
@@ -71,6 +67,10 @@ build: clean
 	@echo "Building update-build-status..."
 	@cd internal/lambda/step-functions/update-build-status && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../../$(BUILD_DIR)/update-build-status/$(BINARY_NAME) .
 	@cd $(BUILD_DIR)/update-build-status && zip -r ../update-build-status.zip .
+
+	@echo "Building promote-images..."
+	@cd internal/lambda/step-functions/promote-images && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../../$(BUILD_DIR)/promote-images/$(BINARY_NAME) .
+	@cd $(BUILD_DIR)/promote-images && zip -r ../promote-images.zip .
 
 	@echo "Building server..."
 	@cd internal/lambda/server && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GOBUILD) -ldflags="-s -w" -o ../../../$(BUILD_DIR)/server/$(BINARY_NAME) .
@@ -185,12 +185,6 @@ update-lambda-code: upload-to-s3
 		--region $(AWS_REGION)
 
 	@aws lambda update-function-code \
-		--function-name $(ENV)-aws-deployer-verify-signatures \
-		--s3-bucket $(S3_BUCKET) \
-		--s3-key aws-deployer/$(VERSION)/verify-signatures.zip \
-		--region $(AWS_REGION)
-
-	@aws lambda update-function-code \
 		--function-name $(ENV)-aws-deployer-deploy-cloudformation \
 		--s3-bucket $(S3_BUCKET) \
 		--s3-key aws-deployer/$(VERSION)/deploy-cloudformation.zip \
@@ -219,6 +213,18 @@ update-lambda-code: upload-to-s3
 		--s3-bucket $(S3_BUCKET) \
 		--s3-key aws-deployer/$(VERSION)/rotator.zip \
 		--region $(AWS_REGION)
+
+	@aws lambda update-function-code \
+		--function-name $(ENV)-aws-deployer-promote-images \
+		--s3-bucket $(S3_BUCKET) \
+		--s3-key aws-deployer/$(VERSION)/promote-images.zip \
+		--region $(AWS_REGION)
+
+	@aws lambda update-function-code \
+		--function-name $(ENV)-aws-deployer-promote-images-multi \
+		--s3-bucket $(S3_BUCKET) \
+		--s3-key aws-deployer/$(VERSION)/promote-images.zip \
+		--region $(AWS_REGION) 2>/dev/null || true
 
 deploy: deploy-infrastructure configure-s3-notification
 	@echo "Deployment completed!"

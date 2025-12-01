@@ -114,6 +114,41 @@
         }
       },
       "ResultPath": "$.targetsResult",
+      "Next": "PromoteImagesToTargets",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "ReleaseLockOnError",
+        "ResultPath": "$.error"
+      }]
+    },
+    "PromoteImagesToTargets": {
+      "Type": "Map",
+      "ItemsPath": "$.targetsResult.Payload.targets",
+      "MaxConcurrency": 5,
+      "Parameters": {
+        "env.$": "$.env",
+        "repo.$": "$.repo",
+        "sk.$": "$.sk",
+        "s3_bucket.$": "$.s3_bucket",
+        "s3_key.$": "$.s3_key",
+        "target_account.$": "$$.Map.Item.Value.account_id",
+        "target_region.$": "$$.Map.Item.Value.region"
+      },
+      "Iterator": {
+        "StartAt": "PromoteImages",
+        "States": {
+          "PromoteImages": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${Environment}-aws-deployer-promote-images-multi",
+              "Payload.$": "$"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.promoteResult",
       "Next": "InitializeDeployments",
       "Catch": [{
         "ErrorEquals": ["States.ALL"],

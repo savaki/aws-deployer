@@ -1,5 +1,7 @@
 # Docker Image Promotion Plan
 
+**Status: IMPLEMENTED** (2024-11-30)
+
 ## Overview
 
 Add Docker image promotion capability to aws-deployer as part of multi-stage deployments. Images are promoted from a source ECR registry to target ECR registries before CloudFormation runs.
@@ -260,3 +262,31 @@ type ImageSpec struct {
 
 3. Should we support promoting from non-ECR sources (Docker Hub, etc.)?
    - **Decision**: ECR-only for initial implementation
+
+## Implementation Summary
+
+### Files Created
+- `internal/lambda/step-functions/promote-images/main.go` - Lambda function
+- `internal/lambda/step-functions/promote-images/main_test.go` - Unit tests
+
+### Files Modified
+- `step-function-definition.json` - Added PromoteImages state before DeployCloudFormation
+- `multi-account-state-machine.json` - Added PromoteImagesToTargets Map state after FetchTargets
+- `cloudformation.template`:
+  - Added PromoteImagesFunction Lambda
+  - Added PromoteImagesMultiAccountFunction Lambda (for multi-account mode)
+  - Added ECRImagePromotion IAM policy to CloudFormationDeployerRole
+  - Added ECR permissions to MultiAccountLambdaRole
+  - Updated inline state machine definitions
+- `Makefile` - Added build and deploy targets for promote-images
+
+### Key Design Decisions
+1. **Single-account mode**: PromoteImages runs before DeployCloudFormation
+2. **Multi-account mode**: PromoteImagesToTargets uses a Map state to promote to each target in parallel (max 5 concurrent)
+3. **Idempotent**: ImageAlreadyExistsException is handled gracefully
+4. **Optional**: If deploy-manifest.json doesn't exist, promotion is skipped (no-op)
+5. **Full layer copy**: For cross-account promotion, layers are downloaded from source and uploaded to target
+   - Parses Docker/OCI manifest to extract layer digests
+   - Uses BatchCheckLayerAvailability to find missing layers
+   - Downloads via GetDownloadUrlForLayer, uploads via InitiateLayerUpload/UploadLayerPart/CompleteLayerUpload
+   - Same-account promotion only copies the manifest (layers share backing store)
