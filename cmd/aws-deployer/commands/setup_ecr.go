@@ -57,6 +57,10 @@ If the AWS account belongs to an organization, org-wide read permissions will be
 				Usage:   "Environment name (dev, staging, prod) - stores registry allowlist in SSM for signature verification",
 				Value:   "dev",
 			},
+			&cli.StringSliceFlag{
+				Name:  "stub",
+				Usage: "Stub name(s) for additional SSM entries (e.g., --stub echo-service creates entry for {repo}-echo-service)",
+			},
 			&cli.BoolFlag{
 				Name:  "dry-run",
 				Usage: "Show what would be created without creating resources",
@@ -76,6 +80,7 @@ func setupECRAction(c *cli.Context, logger *zerolog.Logger) error {
 	region := c.String("region")
 	roleName := c.String("role-name")
 	env := c.String("env")
+	stubs := c.StringSlice("stub")
 	dryRun := c.Bool("dry-run")
 
 	// Validate repository format
@@ -83,6 +88,7 @@ func setupECRAction(c *cli.Context, logger *zerolog.Logger) error {
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid repo format: %q (expected 'owner/repo')", repo)
 	}
+	repoBasename := parts[1] // Use just the repo name for SSM path (matches S3 trigger lookup)
 
 	// Log registry names
 	logger.Info().Msgf("Will create %d registry/registries...", len(registries))
@@ -102,8 +108,12 @@ func setupECRAction(c *cli.Context, logger *zerolog.Logger) error {
 		if roleName != "" {
 			logger.Info().Msgf("DRY RUN: Would add ECR push permissions to IAM role: %s", roleName)
 		}
-		ssmPath := fmt.Sprintf("/%s/aws-deployer/ecr-registries/%s", env, repo)
+		ssmPath := fmt.Sprintf("/%s/aws-deployer/ecr-registries/%s", env, repoBasename)
 		logger.Info().Msgf("DRY RUN: Would store registry allowlist in SSM: %s", ssmPath)
+		for _, stub := range stubs {
+			stubPath := fmt.Sprintf("/%s/aws-deployer/ecr-registries/%s-%s", env, repoBasename, stub)
+			logger.Info().Msgf("DRY RUN: Would store registry allowlist in SSM: %s", stubPath)
+		}
 		logger.Info().Msgf("DRY RUN: Registry list: %s", strings.Join(registries, ","))
 		return nil
 	}
@@ -132,9 +142,17 @@ func setupECRAction(c *cli.Context, logger *zerolog.Logger) error {
 	}
 
 	// Store registry allowlist in SSM for signature verification
-	if err := storeRegistryAllowlistInSSM(ctx, logger, env, repo, region, registries); err != nil {
+	if err := storeRegistryAllowlistInSSM(ctx, logger, env, repoBasename, region, registries); err != nil {
 		logger.Warn().Err(err).Msg("Failed to store registry allowlist in SSM - signature verification will not work")
 		// Don't fail the command, just warn
+	}
+
+	// Store registry allowlist for stubs (e.g., deployer-test-echo-service)
+	for _, stub := range stubs {
+		stubRepoName := fmt.Sprintf("%s-%s", repoBasename, stub)
+		if err := storeRegistryAllowlistInSSM(ctx, logger, env, stubRepoName, region, registries); err != nil {
+			logger.Warn().Err(err).Str("stub", stub).Msg("Failed to store registry allowlist for stub in SSM")
+		}
 	}
 
 	// Summary
@@ -166,7 +184,10 @@ func setupECRAction(c *cli.Context, logger *zerolog.Logger) error {
 	logger.Info().Msg("  2. Tag image: docker tag myimage:latest <registry-uri>:latest")
 	logger.Info().Msg("  3. Push image: docker push <registry-uri>:latest")
 	logger.Info().Msg("")
-	logger.Info().Msgf("Registry allowlist stored in SSM: /%s/aws-deployer/ecr-registries/%s", env, repo)
+	logger.Info().Msgf("Registry allowlist stored in SSM: /%s/aws-deployer/ecr-registries/%s", env, repoBasename)
+	for _, stub := range stubs {
+		logger.Info().Msgf("Registry allowlist stored in SSM: /%s/aws-deployer/ecr-registries/%s-%s", env, repoBasename, stub)
+	}
 	logger.Info().Msg("To enable signature verification, run: aws-deployer setup-signing")
 
 	return nil

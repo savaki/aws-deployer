@@ -12,7 +12,7 @@ import (
 
 // StepFunctionInput represents the input payload for Step Functions executions
 type StepFunctionInput struct {
-	Repo       string `json:"repo"`        // Repository name only
+	Repo       string `json:"repo"`        // Repository name
 	Env        string `json:"env"`         // Environment name (dev, staging, prod)
 	Branch     string `json:"branch"`      // Git branch
 	Version    string `json:"version"`     // Version string

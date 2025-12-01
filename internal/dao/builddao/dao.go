@@ -46,13 +46,14 @@ func (id ID) String() string {
 }
 
 // ParseID parses a build ID into its partition key (pk) and sort key (sk) components
+// The ID format is {pk}:{sk} where pk is {repo}/{env} and sk is the KSUID
 func ParseID(id ID) (pk PK, sk string, err error) {
 	s := string(id)
-	parts := strings.Split(s, ":")
-	if len(parts) != 2 {
+	idx := strings.Index(s, ":")
+	if idx == -1 {
 		return "", "", fmt.Errorf("invalid build ID format: %s, expected {repo}/{env}:{ksuid}", s)
 	}
-	return PK(parts[0]), parts[1], nil
+	return PK(s[:idx]), s[idx+1:], nil
 }
 
 // NewID constructs an ID from partition key and sort key
@@ -72,12 +73,12 @@ const (
 
 // Record represents a deployment build record in DynamoDB
 type Record struct {
-	PK           PK          `ddb:"hash" dynamodbav:"pk"`          // {repo}/{env} - DynamoDB partition key
-	SK           string      `ddb:"range" dynamodbav:"sk"`         // KSUID - DynamoDB sort key
-	ID           ID          `dynamodbav:"id,omitempty"`           // ID is only used for latest entries
-	Repo         string      `dynamodbav:"repo,omitempty"`         // Repository name only
-	Env          string      `dynamodbav:"env,omitempty"`          // Environment name (dev, staging, prod)
-	BuildNumber  string      `dynamodbav:"build_number,omitempty"` // Build number from version
+	PK           PK          `ddb:"hash" dynamodbav:"pk"`                   // {repo}/{env} - DynamoDB partition key
+	SK           string      `ddb:"range" dynamodbav:"sk"`                  // KSUID - DynamoDB sort key
+	ID           ID          `dynamodbav:"id,omitempty"`                    // ID is only used for latest entries
+	Repo         string      `dynamodbav:"repo,omitempty"`                  // Repository name
+	Env          string      `dynamodbav:"env,omitempty"`                   // Environment name (dev, staging, prod)
+	BuildNumber  string      `dynamodbav:"build_number,omitempty"`          // Build number from version
 	Branch       string      `dynamodbav:"branch,omitempty"`
 	Version      string      `dynamodbav:"version,omitempty"`
 	CommitHash   string      `dynamodbav:"commit_hash,omitempty"`

@@ -89,6 +89,7 @@ func (h *Handler) HandleDeployCloudFormation(
 	// Step 1: Download S3 content and parse parameters
 	logger.Info().Msg("Step 1: Downloading S3 content")
 	prefix := strings.TrimRight(input.S3Key, "/") + "/"
+
 	template, err := h.downloadCloudFormationTemplate(ctx, input.S3Bucket, prefix+"cloudformation.template")
 	if err != nil {
 		return nil, fmt.Errorf("failed to download CloudFormation template: %w", err)
@@ -124,6 +125,7 @@ func (h *Handler) HandleDeployCloudFormation(
 
 	// Step 3: Deploy CloudFormation stack
 	logger.Info().Msg("Step 3: Deploying CloudFormation stack")
+
 	stackName := fmt.Sprintf("%s-%s", input.Env, input.Repo)
 
 	logger.Info().
@@ -274,7 +276,8 @@ func (h *Handler) downloadAndParseParams(ctx context.Context, bucket, key, env s
 	}
 
 	// Try to download env-specific parameters (cloudformation-params.{env}.json)
-	envKey := replaceFilename(key, fmt.Sprintf("cloudformation-params.%s.json", env))
+	envFilename := fmt.Sprintf("cloudformation-params.%s.json", env)
+	envKey := replaceFilename(key, envFilename)
 	envContent, err := h.downloadS3Object(ctx, bucket, envKey)
 	if err != nil {
 		logger.Info().

@@ -16,6 +16,10 @@ Parameters:
     Type: String
     Description: Version string for deployment packages (e.g., 20240102-1430)
 
+  S3Prefix:
+    Type: String
+    Description: S3 prefix where deployment artifacts are stored (e.g., _/aws-deployer/20240102-1430)
+
   ZoneId:
     Type: String
     Default: ''
@@ -341,6 +345,31 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/ecr-registries/*'
                   - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/signing/*'
+        - PolicyName: ECRImagePromotion
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeRepositories
+                  - ecr:CreateRepository
+                  - ecr:TagResource
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: 'arn:aws:iam::*:role/AWSCloudFormationStackSetExecutionRole'
 
   # IAM Role for Step Functions
   StepFunctionRole:
@@ -488,6 +517,81 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer'
                   - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Env}/aws-deployer/*'
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeRepositories
+                  - ecr:CreateRepository
+                  - ecr:TagResource
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: 'arn:aws:iam::*:role/AWSCloudFormationStackSetExecutionRole'
+
+  # IAM Role for ECR Image Promotion Lambda (multi-account only)
+  # This is a dedicated role with minimal permissions for cross-account ECR operations
+  ECRPromotionLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: IsMultiAccount
+    Properties:
+      RoleName: !Sub '${Env}-aws-deployer-ecr-promotion-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ECRPromotionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+              # S3 read for container-images.json
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              # DynamoDB for build status updates
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt BuildsTable.Arn
+              # ECR in source account (read images)
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
+              # Cross-account assume role for ECR promotion
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: 'arn:aws:iam::*:role/ECRImagePromotionRole'
 
   # Session Token Secret
   # NOTE: No initial secret - rotator will create it on first rotation
@@ -602,7 +706,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/s3-trigger.zip'
+        S3Key: !Sub '${S3Prefix}/s3-trigger.zip'
       Role: !GetAtt LambdaServiceRole.Arn
       Timeout: 60
       Environment:
@@ -623,34 +727,13 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/trigger-build.zip'
+        S3Key: !Sub '${S3Prefix}/trigger-build.zip'
       Role: !GetAtt TriggerBuildLambdaRole.Arn
       Timeout: 60
       Environment:
         Variables:
           ENV: !Ref Env
           VERSION: !Ref Version
-      Tags:
-        - Key: Environment
-          Value: !Ref Env
-        - Key: ManagedBy
-          Value: aws-deployer
-
-  VerifySignaturesFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${Env}-aws-deployer-verify-signatures'
-      Runtime: provided.al2
-      Handler: bootstrap
-      Code:
-        S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/verify-signatures.zip'
-      Role: !GetAtt CloudFormationDeployerRole.Arn
-      Timeout: 300
-      Environment:
-        Variables:
-          ENVIRONMENT: !Ref Env
-          AWS_ACCOUNT_ID: !Ref AWS::AccountId
       Tags:
         - Key: Environment
           Value: !Ref Env
@@ -665,9 +748,31 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/deploy-cloudformation.zip'
+        S3Key: !Sub '${S3Prefix}/deploy-cloudformation.zip'
       Role: !GetAtt CloudFormationDeployerRole.Arn
       Timeout: 300
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
+
+  PromoteImagesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-promote-images'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub '${S3Prefix}/promote-images.zip'
+      Role: !GetAtt CloudFormationDeployerRole.Arn
+      Timeout: 900
+      MemorySize: 1024
       Environment:
         Variables:
           ENV: !Ref Env
@@ -686,7 +791,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/check-stack-status.zip'
+        S3Key: !Sub '${S3Prefix}/check-stack-status.zip'
       Role: !GetAtt LambdaServiceRole.Arn
       Timeout: 60
       Environment:
@@ -707,7 +812,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/update-build-status.zip'
+        S3Key: !Sub '${S3Prefix}/update-build-status.zip'
       Role: !GetAtt LambdaServiceRole.Arn
       Timeout: 60
       Environment:
@@ -728,7 +833,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/server.zip'
+        S3Key: !Sub '${S3Prefix}/server.zip'
       Role: !GetAtt LambdaServiceRole.Arn
       Timeout: 30
       Environment:
@@ -749,7 +854,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/rotator.zip'
+        S3Key: !Sub '${S3Prefix}/rotator.zip'
       Role: !GetAtt RotatorLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -773,7 +878,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/acquire-lock.zip'
+        S3Key: !Sub '${S3Prefix}/acquire-lock.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -793,7 +898,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/fetch-targets.zip'
+        S3Key: !Sub '${S3Prefix}/fetch-targets.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -813,7 +918,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/initialize-deployments.zip'
+        S3Key: !Sub '${S3Prefix}/initialize-deployments.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -833,7 +938,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/create-stackset.zip'
+        S3Key: !Sub '${S3Prefix}/create-stackset.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 300
       Environment:
@@ -854,7 +959,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/deploy-stack-instances.zip'
+        S3Key: !Sub '${S3Prefix}/deploy-stack-instances.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 300
       Environment:
@@ -874,7 +979,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/check-stackset-status.zip'
+        S3Key: !Sub '${S3Prefix}/check-stackset-status.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -894,7 +999,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/aggregate-results.zip'
+        S3Key: !Sub '${S3Prefix}/aggregate-results.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -914,7 +1019,7 @@ Resources:
       Handler: bootstrap
       Code:
         S3Bucket: !Ref S3BucketName
-        S3Key: !Sub 'aws-deployer/${Version}/release-lock.zip'
+        S3Key: !Sub '${S3Prefix}/release-lock.zip'
       Role: !GetAtt MultiAccountLambdaRole.Arn
       Timeout: 60
       Environment:
@@ -924,6 +1029,29 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Env
+
+  PromoteImagesMultiAccountFunction:
+    Type: AWS::Lambda::Function
+    Condition: IsMultiAccount
+    Properties:
+      FunctionName: !Sub '${Env}-aws-deployer-promote-images-multi'
+      Runtime: provided.al2
+      Handler: bootstrap
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub '${S3Prefix}/promote-images.zip'
+      Role: !GetAtt ECRPromotionLambdaRole.Arn
+      Timeout: 900
+      MemorySize: 1024
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          VERSION: !Ref Version
+      Tags:
+        - Key: Environment
+          Value: !Ref Env
+        - Key: ManagedBy
+          Value: aws-deployer
 
   # Lambda Permission for Secrets Manager to invoke rotator
   RotatorFunctionSecretsManagerPermission:
@@ -1035,8 +1163,25 @@ Resources:
       DefinitionString: !Sub |
         {
           "Comment": "CloudFormation deployment workflow",
-          "StartAt": "DeployCloudFormation",
+          "StartAt": "PromoteImages",
           "States": {
+            "PromoteImages": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${Env}-aws-deployer-promote-images",
+                "Payload.$": "$"
+              },
+              "ResultPath": "$.promoteResult",
+              "Next": "DeployCloudFormation",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleFailure",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
             "DeployCloudFormation": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
@@ -1199,6 +1344,37 @@ Resources:
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {"FunctionName": "${Env}-aws-deployer-fetch-targets", "Payload": {"env.$": "$.env", "repo.$": "$.repo", "sk.$": "$.sk"}},
               "ResultPath": "$.targetsResult",
+              "Next": "PromoteImagesToTargets",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
+            },
+            "PromoteImagesToTargets": {
+              "Type": "Map",
+              "ItemsPath": "$.targetsResult.Payload.targets",
+              "MaxConcurrency": 5,
+              "Parameters": {
+                "env.$": "$.env",
+                "repo.$": "$.repo",
+                "sk.$": "$.sk",
+                "s3_bucket.$": "$.s3_bucket",
+                "s3_key.$": "$.s3_key",
+                "target_account.$": "$$.Map.Item.Value.account_id",
+                "target_region.$": "$$.Map.Item.Value.region"
+              },
+              "Iterator": {
+                "StartAt": "PromoteImages",
+                "States": {
+                  "PromoteImages": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "FunctionName": "${Env}-aws-deployer-promote-images-multi",
+                      "Payload.$": "$"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "ResultPath": "$.promoteResult",
               "Next": "InitializeDeployments",
               "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ReleaseLockOnError", "ResultPath": "$.error"}]
             },

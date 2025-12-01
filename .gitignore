@@ -36,6 +36,7 @@ internal/lambda/step-functions/multi-account/deploy-stack-instances/deploy-stack
 /aggregate-results
 /deploy-cloudformation
 /deploy-stack-instances
+/promote-images
 
 # Frontend build artifacts (built from frontend/ into docroot/)
 internal/lambda/server/docroot/assets/

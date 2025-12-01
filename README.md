@@ -118,13 +118,14 @@ go run internal/lambda/server/main.go serve --disable-ssm --disable-auth
 
 The system consists of the following components:
 
-1. **S3 Trigger Lambda**: Monitors S3 bucket for `cloudformation-params.json` files and triggers Step Function
-2. **Step Function**: Orchestrates the deployment workflow with the following steps:
+1. **S3 Trigger Lambda**: Monitors S3 bucket for `cloudformation-params.json` and creates build records
+2. **Trigger Build Lambda**: Listens to DynamoDB streams and starts Step Function executions for new builds
+3. **Step Function**: Orchestrates the deployment workflow with the following steps:
     - Deploy CloudFormation stack (includes S3 download, status update, and deployment)
     - Monitor stack status until completion
-3. **DynamoDB Table**: Tracks build status and metadata
-4. **Lambda Functions**:
-    - `deploy-cloudformation`: Combined function that downloads S3 content, updates build status, and deploys stack
+4. **DynamoDB Table**: Tracks build status and metadata
+5. **Lambda Functions**:
+    - `deploy-cloudformation`: Downloads S3 content, updates build status, and deploys stack
     - `check-stack-status`: Monitors CloudFormation stack progress
     - `update-build-status`: Updates build status in DynamoDB
 
@@ -145,27 +146,27 @@ Policy rules are still defined in `internal/policy/cloudformation.rego` for when
 
 ## Workflow
 
-1. When a `cloudformation-params.json` file is uploaded to `s3://lmvtfy-github-artifacts/{repo}/{version}/`, it triggers
-   the S3 Lambda
+1. When `cloudformation-params.json` is uploaded to `s3://lmvtfy-github-artifacts/{repo}/{branch}/{version}/`, it triggers the S3 Lambda
 2. The S3 Lambda:
-    - Parses the S3 path to extract repo and version information
+    - Parses the S3 path to extract repo, branch, and version information
     - Generates a new KSUID for the build
     - Creates a build record in DynamoDB with status `PENDING`
-    - Starts a Step Function execution named `{repo}-{env}-{ksuid}`
-3. The Step Function calls the `deploy-cloudformation` Lambda which:
-    - Downloads all files from the S3 directory and parses parameters
+3. DynamoDB Stream triggers the trigger-build Lambda which starts a Step Function execution
+4. The Step Function calls the `deploy-cloudformation` Lambda which:
+    - Downloads the template and params files from S3
     - Updates build status to `IN_PROGRESS` in DynamoDB
     - Creates or updates the CloudFormation stack
-4. Stack deployment is monitored every 15 seconds until completion or failure
-5. Final build status (`SUCCESS` or `FAILED`) is updated in DynamoDB
+5. Stack deployment is monitored every 15 seconds until completion or failure
+6. Final build status (`SUCCESS` or `FAILED`) is updated in DynamoDB
 
 ## Directory Structure
 
 ```
-s3://lmvtfy-github-artifacts/{repo}/{version}/
-├── cloudformation-params.json  # Parameters for the stack
-├── cloudformation.template     # CloudFormation template
-└── ... (other files)
+s3://lmvtfy-github-artifacts/{repo}/{branch}/{version}/
+├── cloudformation-params.json           # Parameters (triggers deployment)
+├── cloudformation-params.{env}.json     # Environment-specific overrides (optional)
+├── cloudformation.template              # CloudFormation template
+└── container-images.json                # Docker images to promote (optional)
 ```
 
 ### Version Format
@@ -182,7 +183,7 @@ The DynamoDB table `dev-aws-deployer--builds` stores build information with a co
 
 Build IDs follow the format: `{repo}/{env}:{ksuid}`
 
-Example: `my-app/dev:2HFj3kLmNoPqRsTuVwXy`
+**Example:** `my-app/dev:2HFj3kLmNoPqRsTuVwXy`
 
 - `{repo}`: Repository name (e.g., `my-app`)
 - `{env}`: Environment name (e.g., `dev`, `staging`, `prod`)
@@ -496,9 +497,13 @@ make clean
 
 ## Stack Naming Convention
 
-CloudFormation stacks are named using the pattern: `${ENV}-{repo}`
+CloudFormation stacks are named using the pattern: `{env}-{repo}`
 
 Examples:
 
-- `dev-my-app` (for repo "my-app" in dev environment)
-- `prod-api-service` (for repo "api-service" in prod environment)
+- `dev-my-app` (repo "my-app" in dev)
+- `prod-api-service` (repo "api-service" in prod)
+
+Step Function execution names follow the pattern: `{repo}-{env}-{ksuid}`
+
+Example: `my-app-dev-2HFj3kLmNoPqRsTuVwXy`

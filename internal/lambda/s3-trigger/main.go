@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -46,9 +47,10 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 	logger := zerolog.Ctx(ctx)
 	key := record.S3.Object.Key
 
-	if !strings.HasSuffix(key, "cloudformation-params.json") {
-		logger.Info().Str("key", key).Msg("Ignoring non-cloudformation-params.json file")
-		return nil
+	// Extract filename from path - only process cloudformation-params.json
+	filename := filepath.Base(key)
+	if filename != "cloudformation-params.json" {
+		return nil // Silently ignore other files
 	}
 
 	pathParts := strings.Split(key, "/")
@@ -71,7 +73,6 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 	commitHash := strings.Join(versionParts[1:], ".")
 
 	// Query pipeline config to get initial environment
-	// Try repo-specific config first, fall back to default config
 	initialEnv := "dev" // Default fallback
 	config, err := h.targetDAO.GetConfig(ctx, repo)
 	if err != nil {
@@ -135,6 +136,7 @@ func (h *Handler) processS3Record(ctx context.Context, record *events.S3EventRec
 		Str("env", initialEnv).
 		Str("ksuid", buildKSUID).
 		Str("version", version).
+		Str("stack_name", stackName).
 		Msg("Created build record with PENDING status")
 	return nil
 }

@@ -120,7 +120,7 @@ The system supports two deployment modes via the `DEPLOYMENT_MODE` parameter:
 **Step Functions Orchestration (`internal/orchestrator/`)**
 - Starts Step Function executions for deployments
 - Atomically updates build status to IN_PROGRESS with execution ARN
-- Execution naming: `{repo}-{env}-{ksuid}`
+- Execution naming: `{repo}-{env}-{ksuid}` (e.g., `myapp-dev-{ksuid}`)
 
 **GraphQL API (`internal/gql/`)**
 - Schema: `internal/gql/schema.graphqls`
@@ -129,23 +129,61 @@ The system supports two deployment modes via the `DEPLOYMENT_MODE` parameter:
 
 ### Data Flow
 
-1. **Trigger**: GitHub Actions uploads `cloudformation-params.json` to S3 at `s3://{bucket}/{repo}/{branch}/{version}/`
+1. **Trigger**: GitHub Actions uploads params file to S3 at `s3://{bucket}/{repo}/{branch}/{version}/`
+   - `cloudformation-params.json` - triggers deployment
+   - `container-images.json` (optional) for Docker image promotion
 2. **S3 Lambda** (`internal/lambda/s3-trigger`): Creates PENDING build record with KSUID
 3. **DynamoDB Stream** → **trigger-build Lambda**: Starts Step Function execution
+   - Execution name: `{repo}-{env}-{ksuid}`
 4. **Step Function**: Orchestrates deployment (single or multi-account)
+   - **promote-images**: Promotes Docker images if `container-images.json` exists
 5. **Status Updates**: Lambda functions update build status throughout workflow
 6. **GraphQL/Frontend**: Queries build records for UI display
 
 ### Standard CloudFormation Parameters
 
-All CloudFormation templates deployed via AWS Deployer should accept these standard parameters in `cloudformation-params.json`:
+All CloudFormation templates deployed via AWS Deployer should accept these standard parameters:
 
 - `Env` - Environment name (dev, staging, prod)
 - `Version` - Build version in format `{build_number}.{commit_hash}`
 - `S3Bucket` - Artifacts bucket name
 - `S3Prefix` - S3 path to artifacts in format `{repo}/{branch}/{version}`
 
-Environment-specific overrides can be provided in `cloudformation-params.{env}.json` which merge with base parameters.
+**File naming convention:**
+- Template: `cloudformation.template`
+- Parameters: `cloudformation-params.json`
+- Environment overrides: `cloudformation-params.{env}.json`
+
+### Docker Image Promotion (Optional)
+
+AWS Deployer can promote Docker images from a source ECR registry to target ECR registries before CloudFormation deployment. This is useful for multi-stage deployments where images are built in a CI account and promoted to deployment accounts.
+
+**To enable:** Include a `deploy-manifest.json` file in your S3 artifacts:
+
+```json
+{
+  "images": [
+    {"repository": "myapp/api", "tag": "1.0.0-abc123"},
+    {"repository": "myapp/worker", "tag": "1.0.0-abc123"}
+  ]
+}
+```
+
+- `repository`: ECR repository name (must exist in both source and target accounts)
+- `tag`: Image tag to promote
+
+**Behavior:**
+- If `deploy-manifest.json` is missing, the step is skipped (no-op)
+- Cross-account: Layers are checked for availability, missing layers are downloaded from source and uploaded to target
+- Same-account: Only the manifest is copied (layers share the same backing store)
+- Idempotent: already-existing images are skipped without error
+- In multi-account mode, images are promoted to each target account in parallel (max 5 concurrent)
+
+**Workflow position:**
+- Single-account: Runs after signature verification, before CloudFormation deployment
+- Multi-account: Runs after fetching targets, before initializing deployments
+
+**Stack naming:** `{env}-{repo}` (e.g., `dev-myapp`)
 
 ### Environment Configuration
 
@@ -229,7 +267,7 @@ input := orchestrator.StepFunctionInput{
     Version:    "1.2.3",
     CommitHash: "abc123",
     S3Bucket:   "artifacts-bucket",
-    S3Key:      "myapp/1.2.3/",
+    S3Key:      "myapp/main/1.2.3/",
 }
 
 executionArn, err := orchestrator.StartExecution(ctx, input)
@@ -245,16 +283,17 @@ executionArn, err := orchestrator.StartExecution(ctx, input)
 
 ## Multi-Account Deployments
 
-The multi-account workflow uses 8 Lambda functions orchestrated by a Step Function:
+The multi-account workflow uses 9 Lambda functions orchestrated by a Step Function:
 
 1. **acquire-lock**: Distributed lock with retry (max 5 minutes)
 2. **fetch-targets**: Query deployment targets from DynamoDB
-3. **initialize-deployments**: Create PENDING deployment records
-4. **create-stackset**: Create/update CloudFormation StackSet template
-5. **deploy-stack-instances**: Deploy instances to target accounts/regions
-6. **check-stackset-status**: Poll until complete (15s intervals), update deployment records
-7. **aggregate-results**: Summarize success/failure, update build status
-8. **release-lock**: Release distributed lock
+3. **promote-images**: Promote Docker images to each target account (parallel, max 5 concurrent)
+4. **initialize-deployments**: Create PENDING deployment records
+5. **create-stackset**: Create/update CloudFormation StackSet template
+6. **deploy-stack-instances**: Deploy instances to target accounts/regions
+7. **check-stackset-status**: Poll until complete (15s intervals), update deployment records
+8. **aggregate-results**: Summarize success/failure, update build status
+9. **release-lock**: Release distributed lock
 
 Error handling: All failures release the lock before exiting.
 

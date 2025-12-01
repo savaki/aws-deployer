@@ -35,7 +35,7 @@
           "version": {
             "S": "1.2.3-build.999"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "123abc456def789"
           },
           "status": {
@@ -89,7 +89,7 @@
           "version": {
             "S": "1.2.3-build.999"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "123abc456def789"
           },
           "status": {
@@ -124,7 +124,7 @@
           "version": {
             "S": "1.2.3-build.999"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "123abc456def789"
           },
           "status": {
@@ -178,7 +178,7 @@
           "version": {
             "S": "0.9.0-build.111"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "old123old456old"
           },
           "status": {

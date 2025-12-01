@@ -344,7 +344,7 @@ func unmarshalMap(m map[string]types.AttributeValue, out interface{}) error {
 				buildRecord.Version = s.Value
 			}
 		}
-		if v, exists := m["commitHash"]; exists {
+		if v, exists := m["commit_hash"]; exists {
 			if s, ok := v.(*types.AttributeValueMemberS); ok {
 				buildRecord.CommitHash = s.Value
 			}

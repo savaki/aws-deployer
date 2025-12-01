@@ -205,6 +205,52 @@ to enable cross-account CloudFormation StackSet deployments.`,
 					)
 				},
 			},
+			{
+				Name:  "setup-ecr-target",
+				Usage: "Create ECR image promotion role in target account",
+				Description: `Create the ECRImagePromotionRole in a target account.
+
+This role allows the deployer account's ECR promotion Lambda to push Docker images
+to this account. The role has minimal permissions: create repositories and push images only.
+It cannot modify or delete repositories after creation.
+
+Run this command from within the target account.`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "deployer-account",
+						Usage:    "Deployer AWS account ID",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "env",
+						Usage:    "Environment (dev, staging, prod)",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:  "region",
+						Usage: "AWS region",
+						Value: "us-west-2",
+					},
+					&cli.BoolFlag{
+						Name:  "dry-run",
+						Usage: "Show what would be created without creating it",
+					},
+				},
+				Action: func(c *cli.Context) error {
+					ctx := c.Context
+					handler, err := newAWSHandler(ctx, c.String("region"))
+					if err != nil {
+						return err
+					}
+
+					return handler.setupECRTargetAccount(
+						ctx,
+						c.String("deployer-account"),
+						c.String("env"),
+						c.Bool("dry-run"),
+					)
+				},
+			},
 		},
 	}
 }
@@ -574,3 +620,162 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// getECRTrustPolicy creates the trust policy for ECRImagePromotionRole
+func getECRTrustPolicy(deployerAccountID, env string) string {
+	// Trust the dedicated ECR promotion Lambda role from the deployer account
+	policy := map[string]interface{}{
+		"Version": "2012-10-17",
+		"Statement": []map[string]interface{}{
+			{
+				"Effect": "Allow",
+				"Principal": map[string]interface{}{
+					"AWS": fmt.Sprintf("arn:aws:iam::%s:role/%s-aws-deployer-ecr-promotion-role", deployerAccountID, env),
+				},
+				"Action": "sts:AssumeRole",
+			},
+		},
+	}
+
+	policyJSON, _ := json.Marshal(policy)
+	return string(policyJSON)
+}
+
+// getECRPermissionsPolicy creates the permissions policy for ECRImagePromotionRole
+// This policy allows creating repositories and pushing images, but NOT modifying or deleting
+func getECRPermissionsPolicy() string {
+	policy := map[string]interface{}{
+		"Version": "2012-10-17",
+		"Statement": []map[string]interface{}{
+			{
+				"Sid":      "ECRAuth",
+				"Effect":   "Allow",
+				"Action":   "ecr:GetAuthorizationToken",
+				"Resource": "*",
+			},
+			{
+				"Sid":    "ECRCreateRepository",
+				"Effect": "Allow",
+				"Action": []string{
+					"ecr:CreateRepository",
+					"ecr:DescribeRepositories",
+					"ecr:TagResource", // Required by CreateRepository even without explicit tags
+				},
+				"Resource": "*",
+			},
+			{
+				"Sid":    "ECRPushImages",
+				"Effect": "Allow",
+				"Action": []string{
+					"ecr:BatchCheckLayerAvailability",
+					"ecr:InitiateLayerUpload",
+					"ecr:UploadLayerPart",
+					"ecr:CompleteLayerUpload",
+					"ecr:PutImage",
+					"ecr:BatchGetImage",
+					"ecr:GetDownloadUrlForLayer",
+				},
+				"Resource": "arn:aws:ecr:*:*:repository/*",
+			},
+		},
+	}
+
+	policyJSON, _ := json.Marshal(policy)
+	return string(policyJSON)
+}
+
+// setupECRTargetAccount creates the ECRImagePromotionRole in a target account
+func (h *awsHandler) setupECRTargetAccount(ctx context.Context, deployerAccountID, env string, dryRun bool) error {
+	// Get current account ID
+	identity, err := h.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return fmt.Errorf("failed to get caller identity: %w", err)
+	}
+	targetAccountID := *identity.Account
+
+	if targetAccountID == deployerAccountID {
+		return fmt.Errorf("this command should be run from a target account, not the deployer account %s", deployerAccountID)
+	}
+
+	roleName := constants.ECRImagePromotionRoleName
+	trustPolicy := getECRTrustPolicy(deployerAccountID, env)
+	permissionsPolicy := getECRPermissionsPolicy()
+
+	if dryRun {
+		fmt.Printf("DRY RUN: Would create ECR promotion role in account %s:\n", targetAccountID)
+		fmt.Printf("Role Name: %s\n", roleName)
+		fmt.Printf("Trust Policy:\n%s\n", prettyJSON(trustPolicy))
+		fmt.Printf("Permissions Policy:\n%s\n", prettyJSON(permissionsPolicy))
+		return nil
+	}
+
+	fmt.Printf("Creating ECR promotion role in account %s...\n", targetAccountID)
+
+	// Check if role already exists
+	_, err = h.iamClient.GetRole(ctx, &iam.GetRoleInput{
+		RoleName: aws.String(roleName),
+	})
+	if err == nil {
+		fmt.Printf("Role %s already exists. Updating trust policy...\n", roleName)
+		// Update assume role policy
+		_, err = h.iamClient.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
+			RoleName:       aws.String(roleName),
+			PolicyDocument: aws.String(trustPolicy),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update trust policy: %w", err)
+		}
+		fmt.Printf("Updated trust policy\n")
+	} else {
+		// Create role
+		_, err = h.iamClient.CreateRole(ctx, &iam.CreateRoleInput{
+			RoleName:                 aws.String(roleName),
+			AssumeRolePolicyDocument: aws.String(trustPolicy),
+			Description:              aws.String("ECR image promotion role for aws-deployer (create/push only)"),
+			Tags: []iamtypes.Tag{
+				{
+					Key:   aws.String("ManagedBy"),
+					Value: aws.String("aws-deployer"),
+				},
+				{
+					Key:   aws.String("Purpose"),
+					Value: aws.String("ECRImagePromotion"),
+				},
+				{
+					Key:   aws.String("Environment"),
+					Value: aws.String(env),
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create role: %w", err)
+		}
+		fmt.Printf("Created role: %s\n", roleName)
+	}
+
+	// Attach inline policy for ECR permissions
+	policyName := "ECRImagePromotionPolicy"
+	_, err = h.iamClient.PutRolePolicy(ctx, &iam.PutRolePolicyInput{
+		RoleName:       aws.String(roleName),
+		PolicyName:     aws.String(policyName),
+		PolicyDocument: aws.String(permissionsPolicy),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to attach permissions policy: %w", err)
+	}
+	fmt.Printf("Attached permissions policy: %s\n", policyName)
+
+	fmt.Printf("\n✓ ECR setup complete for account %s\n", targetAccountID)
+	fmt.Printf("  Role ARN: arn:aws:iam::%s:role/%s\n", targetAccountID, roleName)
+	fmt.Printf("  Trusted by: %s-aws-deployer-ecr-promotion-role in account %s\n", env, deployerAccountID)
+	fmt.Printf("\n  Permissions granted:\n")
+	fmt.Printf("    - Create ECR repositories\n")
+	fmt.Printf("    - Push images to any repository\n")
+	fmt.Printf("    - Read images (for layer checks)\n")
+	fmt.Printf("\n  Permissions NOT granted (immutable after creation):\n")
+	fmt.Printf("    - Delete repositories\n")
+	fmt.Printf("    - Modify repository policies\n")
+	fmt.Printf("    - Change lifecycle policies\n")
+	return nil
+}
+

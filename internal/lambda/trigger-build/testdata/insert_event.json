@@ -35,7 +35,7 @@
           "version": {
             "S": "1.0.0-build.123"
           },
-          "commitHash": {
+          "commit_hash": {
             "S": "abc123def456789"
           },
           "status": {

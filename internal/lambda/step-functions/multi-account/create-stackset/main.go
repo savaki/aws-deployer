@@ -68,9 +68,11 @@ func (h *Handler) HandleCreateStackSet(ctx context.Context, input *Input) (*Outp
 	logger := zerolog.Ctx(ctx)
 
 	stackSetName := fmt.Sprintf("%s-%s", input.Env, input.Repo)
-	templateURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%scloudformation.template",
+
+	templateURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s%s",
 		input.S3Bucket,
-		strings.TrimRight(input.S3Key, "/")+"/")
+		strings.TrimRight(input.S3Key, "/")+"/",
+		"cloudformation.template")
 
 	logger.Info().
 		Str("stack_set_name", stackSetName).
@@ -194,9 +196,8 @@ func (h *Handler) HandleCreateStackSet(ctx context.Context, input *Input) (*Outp
 	}, nil
 }
 
-// fetchParametersFromS3 reads cloudformation-params.json from S3 and returns CloudFormation parameters
-// It first loads cloudformation-params.json (base), then loads cloudformation-params.{env}.json (overrides)
-// and merges them, with env-specific values overriding base values for matching keys
+// fetchParametersFromS3 reads CloudFormation params from S3 and returns CloudFormation parameters
+// It first loads the base params, then loads env-specific overrides and merges them
 // Returns empty parameters if no files exist (parameters are optional)
 func (h *Handler) fetchParametersFromS3(ctx context.Context, bucket, key, env string) ([]types.Parameter, error) {
 	logger := zerolog.Ctx(ctx)
@@ -221,6 +222,8 @@ func (h *Handler) fetchParametersFromS3(ctx context.Context, bucket, key, env st
 	merged := utils.MergeParameters(base, override)
 	logger.Info().
 		Str("env", env).
+		Str("base_key", baseKey).
+		Str("override_key", overrideKey).
 		Any("base", base).
 		Any("override", override).
 		Any("merged", merged).
