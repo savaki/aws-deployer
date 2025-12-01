@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -177,7 +178,7 @@ func (s *IAMService) CreateGitHubUser(ctx context.Context, username, bucket, rep
 }
 
 // CreateGitHubOIDCRole creates an IAM role for GitHub Actions OIDC authentication
-func (s *IAMService) CreateGitHubOIDCRole(ctx context.Context, roleName, owner, repo, bucket string) (string, error) {
+func (s *IAMService) CreateGitHubOIDCRole(ctx context.Context, roleName, owner, repo, bucket string, stubs []string) (string, error) {
 	// Ensure OIDC provider exists
 	providerARN, err := s.GetOrCreateGitHubOIDCProvider(ctx)
 	if err != nil {
@@ -234,31 +235,51 @@ func (s *IAMService) CreateGitHubOIDCRole(ctx context.Context, roleName, owner, 
 		}
 	}
 
+	// Build list of S3 prefixes: repo and repo-stub for each stub
+	prefixes := []string{repo}
+	for _, stub := range stubs {
+		prefixes = append(prefixes, fmt.Sprintf("%s-%s", repo, stub))
+	}
+
+	// Build S3 resource ARNs for PutObject
+	var putObjectResources []string
+	for _, prefix := range prefixes {
+		putObjectResources = append(putObjectResources, fmt.Sprintf("arn:aws:s3:::%s/%s/*", bucket, prefix))
+	}
+
+	// Build S3 prefix patterns for ListBucket condition
+	var listPrefixPatterns []string
+	for _, prefix := range prefixes {
+		listPrefixPatterns = append(listPrefixPatterns, fmt.Sprintf("%s/*", prefix))
+	}
+
 	// Build the S3 permissions policy
-	policyDocument := fmt.Sprintf(`{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::%s/%s/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListBucket"
-      ],
-      "Resource": "arn:aws:s3:::%s",
-      "Condition": {
-        "StringLike": {
-          "s3:prefix": "%s/*"
-        }
-      }
-    }
-  ]
-}`, bucket, repo, bucket, repo)
+	policy := map[string]interface{}{
+		"Version": "2012-10-17",
+		"Statement": []map[string]interface{}{
+			{
+				"Effect":   "Allow",
+				"Action":   []string{"s3:PutObject"},
+				"Resource": putObjectResources,
+			},
+			{
+				"Effect":   "Allow",
+				"Action":   []string{"s3:ListBucket"},
+				"Resource": fmt.Sprintf("arn:aws:s3:::%s", bucket),
+				"Condition": map[string]interface{}{
+					"StringLike": map[string]interface{}{
+						"s3:prefix": listPrefixPatterns,
+					},
+				},
+			},
+		},
+	}
+
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal S3 policy: %w", err)
+	}
+	policyDocument := string(policyJSON)
 
 	// Attach/update the inline policy to the role (PutRolePolicy is idempotent)
 	_, err = s.client.PutRolePolicy(ctx, &iam.PutRolePolicyInput{

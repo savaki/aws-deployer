@@ -53,6 +53,10 @@ the necessary GitHub secrets for your repository to deploy to AWS without long-l
 				Aliases: []string{"e"},
 				Usage:   "ECR registry name(s) to create and grant push access (can be specified multiple times)",
 			},
+			&cli.StringSliceFlag{
+				Name:  "stub",
+				Usage: "Stub name(s) for additional S3 paths (e.g., --stub bar grants access to {repo}-bar/*)",
+			},
 			&cli.StringFlag{
 				Name:    "region",
 				Usage:   "AWS region for ECR registries",
@@ -73,6 +77,7 @@ func setupGitHubAction(c *cli.Context) error {
 	bucket := c.String("bucket")
 	githubTokenSecret := c.String("github-token-secret")
 	ecrRegistries := c.StringSlice("ecr-registry")
+	stubs := c.StringSlice("stub")
 	region := c.String("region")
 
 	if repoFullPath == "" {
@@ -115,7 +120,7 @@ func setupGitHubAction(c *cli.Context) error {
 	}
 
 	// Create or update the OIDC role and get ARN
-	roleARN, err := iamService.CreateGitHubOIDCRole(context.Background(), roleName, owner, repo, bucket)
+	roleARN, err := iamService.CreateGitHubOIDCRole(context.Background(), roleName, owner, repo, bucket, stubs)
 	if err != nil {
 		return fmt.Errorf("failed to create/update GitHub OIDC role: %w", err)
 	}
@@ -176,6 +181,9 @@ func setupGitHubAction(c *cli.Context) error {
 	fmt.Printf("✓ IAM role %s created/updated successfully\n", roleName)
 	fmt.Printf("✓ Role ARN: %s\n", roleARN)
 	fmt.Printf("✓ IAM policy grants S3 access to: %s/%s/*\n", bucket, repo)
+	for _, stub := range stubs {
+		fmt.Printf("✓ IAM policy grants S3 access to: %s/%s-%s/*\n", bucket, repo, stub)
+	}
 	if ecrResult != nil && len(ecrResult.Repositories) > 0 {
 		fmt.Printf("✓ IAM policy grants ECR push access to %d registr(ies)\n", len(ecrResult.Repositories))
 	}
