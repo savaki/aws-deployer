@@ -93,11 +93,11 @@ export function DeploymentGrid(props: DeploymentGridProps) {
                 {(buildName) => (
                     <div class="deployment-row">
                         {/* Desktop layout */}
-                        <div class="desktop-layout grid-cols-[200px_1fr] gap-2 items-start">
+                        <div class="desktop-layout grid-cols-[200px_1fr] gap-2 items-stretch">
                             <div class="pt-2">
                                 <h3 class="font-semibold text-lg">{buildName}</h3>
                             </div>
-                            <div class="desktop-layout grid-cols-3 gap-2">
+                            <div class="desktop-layout grid-cols-3 gap-2 items-stretch">
                                 <For each={ENVIRONMENTS}>
                                     {(env) => {
                                         const deployment = deploymentMap().get(`${buildName}-${env}`)

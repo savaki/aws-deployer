@@ -148,7 +148,7 @@ export function DeploymentCard(props: DeploymentCardProps) {
     if (!props.version || !props.status || !props.deployedAt) {
         return (
             <Card class="h-full bg-muted/30 border-dashed">
-                <CardContent class="flex items-center justify-center h-32 p-2.5">
+                <CardContent class="flex items-center justify-center h-full min-h-16 p-2">
                     <p class="text-sm text-muted-foreground">No deployment</p>
                 </CardContent>
             </Card>
@@ -197,7 +197,7 @@ export function DeploymentCard(props: DeploymentCardProps) {
     return (
         <>
             <Card class={cardClassName()}>
-                <CardContent class="p-2 space-y-1 flex-1 min-h-20">
+                <CardContent class="p-2 space-y-0.5 flex-1">
                     <div class="flex items-start justify-between">
                         <code class="text-sm bg-muted px-1 py-0.5 rounded font-mono font-medium">
                             {props.version}
@@ -232,7 +232,7 @@ export function DeploymentCard(props: DeploymentCardProps) {
                     </Show>
                 </CardContent>
 
-                <CardFooter class="px-2 pb-2 pt-0 flex gap-1.5">
+                <CardFooter class="px-2 pb-1.5 pt-0 flex gap-1.5">
                     <Show when={canPromote()}>
                         <div
                             class="flex-1 relative"
