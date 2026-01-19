@@ -1,17 +1,17 @@
 import {createMemo, createSignal, Show} from 'solid-js'
-import {IoClose, IoSearch} from 'solid-icons/io'
 import type {Deployment, RedeployInput} from '../components/DeploymentGrid'
 import {DeploymentGrid} from '../components/DeploymentGrid'
 import {createBuildsQuery, mapBuildStatus, promoteDeployment, redeployBuild} from '../lib/graphql'
 import {Select, SelectItem} from '../components/ui/select'
 import {showToast} from '../components/ui/toast'
 
-export function DeploymentsPage() {
+interface DeploymentsPageProps {
+    filterText: string
+}
+
+export function DeploymentsPage(props: DeploymentsPageProps) {
     // Environment selector (defaults to 'dev')
     const [selectedEnv, setSelectedEnv] = createSignal<'dev' | 'stg' | 'prd'>('dev')
-
-    // Filter text for repo search
-    const [filterText, setFilterText] = createSignal('')
 
     // Fetch builds for all environments (for desktop view)
     const devQuery = createBuildsQuery('dev')
@@ -51,7 +51,7 @@ export function DeploymentsPage() {
 
     // Filter deployments based on filter text
     const filteredDeployments = createMemo((): Deployment[] => {
-        const filter = filterText().toLowerCase().trim()
+        const filter = props.filterText.toLowerCase().trim()
         if (!filter) {
             return deployments()
         }
@@ -116,43 +116,18 @@ export function DeploymentsPage() {
 
     return (
         <>
-            <div class="mb-6">
-                <div class="flex items-center gap-3 flex-wrap">
-                    {/* Filter input with search icon */}
-                    <div class="relative group">
-                        <IoSearch class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground transition-colors group-focus-within:text-primary" />
-                        <input
-                            type="text"
-                            placeholder="Filter repos..."
-                            value={filterText()}
-                            onInput={(e) => setFilterText(e.currentTarget.value)}
-                            class="pl-9 pr-8 py-2 text-sm bg-card border border-border rounded-lg shadow-sm transition-all duration-200 ease-out w-56 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary hover:border-muted-foreground/30"
-                        />
-                        <Show when={filterText()}>
-                            <button
-                                onClick={() => setFilterText('')}
-                                class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                                aria-label="Clear filter"
-                            >
-                                <IoClose class="w-4 h-4" />
-                            </button>
-                        </Show>
-                    </div>
-
-                    {/* Environment selector - visible on mobile, hidden on desktop */}
-                    <div class="mobile-env-selector items-center gap-2">
-                        <label class="text-sm font-medium">Environment:</label>
-                        <Select
-                            value={selectedEnv()}
-                            onValueChange={(val) => setSelectedEnv(val as 'dev' | 'stg' | 'prd')}
-                            placeholder="Select environment"
-                        >
-                            <SelectItem value="dev" onSelect={() => setSelectedEnv('dev')}>dev</SelectItem>
-                            <SelectItem value="stg" onSelect={() => setSelectedEnv('stg')}>stg</SelectItem>
-                            <SelectItem value="prd" onSelect={() => setSelectedEnv('prd')}>prd</SelectItem>
-                        </Select>
-                    </div>
-                </div>
+            {/* Environment selector - visible on mobile, hidden on desktop */}
+            <div class="mb-6 mobile-env-selector items-center gap-2">
+                <label class="text-sm font-medium">Environment:</label>
+                <Select
+                    value={selectedEnv()}
+                    onValueChange={(val) => setSelectedEnv(val as 'dev' | 'stg' | 'prd')}
+                    placeholder="Select environment"
+                >
+                    <SelectItem value="dev" onSelect={() => setSelectedEnv('dev')}>dev</SelectItem>
+                    <SelectItem value="stg" onSelect={() => setSelectedEnv('stg')}>stg</SelectItem>
+                    <SelectItem value="prd" onSelect={() => setSelectedEnv('prd')}>prd</SelectItem>
+                </Select>
             </div>
 
             <Show

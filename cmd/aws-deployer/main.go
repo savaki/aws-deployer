@@ -28,6 +28,7 @@ This tool provides commands for:
 			commands.SetupECRCommand(&logger),
 			commands.SetupSigningCommand(&logger),
 			commands.TargetsCommand(&logger),
+			commands.SyncCommand(&logger),
 		},
 	}
 
