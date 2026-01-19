@@ -1,6 +1,7 @@
 import {For} from 'solid-js'
 import type {DeploymentStatus} from './DeploymentCard'
 import {DeploymentCard} from './DeploymentCard'
+import {sortReposByRecentBuild} from '../lib/deployments'
 
 export interface DeploymentError {
     accountId: string
@@ -41,23 +42,7 @@ const ENV_LABELS: Record<string, string> = {
 
 export function DeploymentGrid(props: DeploymentGridProps) {
     // Group deployments by build name, sorted by most recent build time
-    const buildNames = () => {
-        // Find the most recent deployedAt for each repo
-        const repoLatestTime = new Map<string, Date>()
-        props.deployments.forEach((d) => {
-            const current = repoLatestTime.get(d.name)
-            if (!current || d.deployedAt > current) {
-                repoLatestTime.set(d.name, d.deployedAt)
-            }
-        })
-
-        // Sort by most recent build time (descending)
-        return Array.from(repoLatestTime.keys()).sort((a, b) => {
-            const timeA = repoLatestTime.get(a)!.getTime()
-            const timeB = repoLatestTime.get(b)!.getTime()
-            return timeB - timeA
-        })
-    }
+    const buildNames = () => sortReposByRecentBuild(props.deployments)
 
     // Create a lookup map for deployments
     const deploymentMap = () => {

@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "codegen": "graphql-codegen --config codegen.ts"
+    "codegen": "graphql-codegen --config codegen.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@graphql-codegen/cli": "^6.0.0",
@@ -21,12 +23,15 @@
     "solid-js": "^1.9.9"
   },
   "devDependencies": {
+    "@solidjs/testing-library": "^0.8.10",
     "@types/node": "^24.6.0",
     "autoprefixer": "^10.4.21",
+    "jsdom": "^27.4.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.9.3",
     "vite": "^7.1.7",
-    "vite-plugin-solid": "^2.11.8"
+    "vite-plugin-solid": "^2.11.8",
+    "vitest": "^4.0.17"
   }
 }
