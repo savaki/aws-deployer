@@ -13,6 +13,7 @@ import {showToast} from './ui/toast'
 export type DeploymentStatus = 'success' | 'failed' | 'in-progress' | 'pending'
 
 export interface DeploymentHistory {
+    id: string
     version: string
     deployedAt: Date
     status: DeploymentStatus
@@ -26,6 +27,7 @@ export interface DeploymentError {
 }
 
 interface DeploymentCardProps {
+    buildId?: string
     version?: string
     status?: DeploymentStatus
     deployedAt?: Date
@@ -37,7 +39,7 @@ interface DeploymentCardProps {
     downstreamEnvs?: string[]
     deploymentErrors?: DeploymentError[]
     allDeployments?: Map<string, {version: string; env: string; deployedAt: Date}>
-    onRedeploy: (version: string) => void
+    onRedeploy: (buildId: string, version: string) => void
     onPromote: () => void
 }
 
@@ -52,6 +54,7 @@ export function DeploymentCard(props: DeploymentCardProps) {
     const [isRedeployDialogOpen, setIsRedeployDialogOpen] = createSignal(false)
     const [isPromoteDialogOpen, setIsPromoteDialogOpen] = createSignal(false)
     const [isDeploymentErrorsDialogOpen, setIsDeploymentErrorsDialogOpen] = createSignal(false)
+    const [selectedBuildId, setSelectedBuildId] = createSignal(props.buildId || '')
     const [selectedVersion, setSelectedVersion] = createSignal(props.version || '')
 
     // Fetch deployment history when dialog opens (lazy loading)
@@ -61,6 +64,7 @@ export function DeploymentCard(props: DeploymentCardProps) {
             const builds = await fetchBuildsByRepo(props.buildName, props.environment)
             return builds
                 .map(build => ({
+                    id: build.id,
                     version: build.version,
                     deployedAt: new Date(build.startTime),
                     status: mapBuildStatus(build.status),
@@ -70,12 +74,13 @@ export function DeploymentCard(props: DeploymentCardProps) {
     )
 
     const handleRedeployClick = () => {
+        setSelectedBuildId(props.buildId || '')
         setSelectedVersion(props.version || '')
         setIsRedeployDialogOpen(true)
     }
 
     const handleConfirmRedeploy = () => {
-        props.onRedeploy(selectedVersion())
+        props.onRedeploy(selectedBuildId(), selectedVersion())
         setIsRedeployDialogOpen(false)
     }
 
@@ -327,9 +332,12 @@ export function DeploymentCard(props: DeploymentCardProps) {
                             <div class="space-y-2">
                                 {deploymentHistory()?.slice(0, 10).map((deployment) => (
                                     <div
-                                        onClick={() => setSelectedVersion(deployment.version)}
+                                        onClick={() => {
+                                            setSelectedBuildId(deployment.id)
+                                            setSelectedVersion(deployment.version)
+                                        }}
                                         class={`p-3 rounded-md border cursor-pointer transition-colors ${
-                                            selectedVersion() === deployment.version
+                                            selectedBuildId() === deployment.id
                                                 ? 'border-primary bg-primary/5'
                                                 : 'border-border hover:border-primary/50 hover:bg-accent/50'
                                         }`}
@@ -353,7 +361,7 @@ export function DeploymentCard(props: DeploymentCardProps) {
                         <Button variant="outline" onClick={() => setIsRedeployDialogOpen(false)}>
                             Cancel
                         </Button>
-                        <Button onClick={handleConfirmRedeploy} disabled={!selectedVersion()}>
+                        <Button onClick={handleConfirmRedeploy} disabled={!selectedBuildId()}>
                             Deploy
                         </Button>
                     </DialogFooter>

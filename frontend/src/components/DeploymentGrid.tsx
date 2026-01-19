@@ -23,10 +23,17 @@ export interface Deployment {
     deploymentErrors: DeploymentError[]
 }
 
+export interface RedeployInput {
+    buildId: string
+    version: string
+    name: string
+    environment: string
+}
+
 interface DeploymentGridProps {
     deployments: Deployment[]
     versionHistory: Record<string, string[]>
-    onRedeploy: (deployment: Deployment, version: string) => void
+    onRedeploy: (input: RedeployInput) => void
     onPromote: (deployment: Deployment) => void
     selectedEnv?: string // For mobile single-env view
 }
@@ -98,6 +105,7 @@ export function DeploymentGrid(props: DeploymentGridProps) {
                                         const deployment = deploymentMap().get(`${buildName}-${env}`)
                                         return (
                                             <DeploymentCard
+                                                buildId={deployment?.id}
                                                 version={deployment?.version}
                                                 status={deployment?.status}
                                                 deployedAt={deployment?.deployedAt}
@@ -109,7 +117,7 @@ export function DeploymentGrid(props: DeploymentGridProps) {
                                                 downstreamEnvs={deployment?.downstreamEnvs}
                                                 deploymentErrors={deployment?.deploymentErrors}
                                                 allDeployments={versionMap()}
-                                                onRedeploy={(version) => deployment && props.onRedeploy(deployment, version)}
+                                                onRedeploy={(buildId, version) => props.onRedeploy({buildId, version, name: buildName, environment: env})}
                                                 onPromote={() => deployment && props.onPromote(deployment)}
                                             />
                                         )
@@ -129,6 +137,7 @@ export function DeploymentGrid(props: DeploymentGridProps) {
                                     const deployment = deploymentMap().get(`${buildName}-${env}`)
                                     return (
                                         <DeploymentCard
+                                            buildId={deployment?.id}
                                             version={deployment?.version}
                                             status={deployment?.status}
                                             deployedAt={deployment?.deployedAt}
@@ -140,7 +149,7 @@ export function DeploymentGrid(props: DeploymentGridProps) {
                                             downstreamEnvs={deployment?.downstreamEnvs}
                                             deploymentErrors={deployment?.deploymentErrors}
                                             allDeployments={versionMap()}
-                                            onRedeploy={(version) => deployment && props.onRedeploy(deployment, version)}
+                                            onRedeploy={(buildId, version) => props.onRedeploy({buildId, version, name: buildName, environment: env})}
                                             onPromote={() => deployment && props.onPromote(deployment)}
                                         />
                                     )

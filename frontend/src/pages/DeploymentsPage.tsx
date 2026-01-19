@@ -1,5 +1,5 @@
 import {createMemo, createSignal, Show} from 'solid-js'
-import type {Deployment} from '../components/DeploymentGrid'
+import type {Deployment, RedeployInput} from '../components/DeploymentGrid'
 import {DeploymentGrid} from '../components/DeploymentGrid'
 import {createBuildsQuery, mapBuildStatus, promoteDeployment, redeployBuild} from '../lib/graphql'
 import {Select, SelectItem} from '../components/ui/select'
@@ -59,29 +59,15 @@ export function DeploymentsPage() {
         return history
     })
 
-    const handleRedeploy = async (deployment: Deployment, version: string) => {
+    const handleRedeploy = async (input: RedeployInput) => {
         try {
-            console.log(`Redeploying ${deployment.name} ${version} to ${deployment.environment}`)
+            console.log(`Redeploying ${input.name} ${input.version} to ${input.environment}`)
 
-            // Find the build ID for the selected version
-            const buildsForRepo = allBuilds().filter(
-                b => b.repo === deployment.name && b.env === deployment.environment && b.version === version
-            )
-
-            if (buildsForRepo.length === 0) {
-                throw new Error(`No build found for ${deployment.name} version ${version}`)
-            }
-
-            // Use the most recent build with this version
-            const buildToRedeploy = buildsForRepo.sort((a, b) =>
-                new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
-            )[0]
-
-            await redeployBuild(buildToRedeploy.id)
+            await redeployBuild(input.buildId)
 
             showToast({
                 title: 'Deployment triggered',
-                description: `${deployment.name} ${version} is being deployed to ${deployment.environment}`,
+                description: `${input.name} ${input.version} is being deployed to ${input.environment}`,
                 duration: 3000
             })
 
@@ -90,7 +76,7 @@ export function DeploymentsPage() {
             stgQuery.builds()
             prdQuery.builds()
         } catch (error) {
-            console.error(`Failed to redeploy ${deployment.name}:`, error)
+            console.error(`Failed to redeploy ${input.name}:`, error)
             showToast({
                 title: 'Deployment failed',
                 description: error instanceof Error ? error.message : 'Failed to trigger deployment',
