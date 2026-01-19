@@ -284,6 +284,20 @@ func (d *DAO) QueryByBuild(ctx context.Context, env, repo, buildID string) ([]Re
 	return records, nil
 }
 
+// QueryByPK returns all deployments for a given env/repo partition key
+func (d *DAO) QueryByPK(ctx context.Context, env, repo string) ([]Record, error) {
+	pk := NewPK(env, repo)
+	var records []Record
+
+	err := d.table.Query("#PK = ?", pk).
+		FindAllWithContext(ctx, &records)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deployments: %w", err)
+	}
+
+	return records, nil
+}
+
 // Delete removes a deployment record
 func (d *DAO) Delete(ctx context.Context, id ID) error {
 	env, repo, account, region, err := ParseID(id)

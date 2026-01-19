@@ -1,8 +1,13 @@
 import {Router, Route, A, useLocation} from '@solidjs/router'
+import {createSignal, Show} from 'solid-js'
 import {TbActivity, TbGitBranch} from 'solid-icons/tb'
+import {IoClose, IoSearch} from 'solid-icons/io'
 import {DeploymentsPage} from './pages/DeploymentsPage'
 import {EnvironmentsPage} from './pages/EnvironmentsPage'
 import {ToastRegion, ToastList} from './components/ui/toast'
+
+// Global filter state
+const [filterText, setFilterText] = createSignal('')
 
 function App() {
     return (
@@ -17,7 +22,7 @@ function App() {
                 </ToastRegion>
             </div>
         )}>
-            <Route path="/" component={DeploymentsPage}/>
+            <Route path="/" component={() => <DeploymentsPage filterText={filterText()} />}/>
             <Route path="/envs" component={EnvironmentsPage}/>
         </Router>
     )
@@ -29,13 +34,37 @@ function Header() {
 
     return (
         <div class="mb-4">
-            <div class="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+            <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                {/* Left: Logo + Title */}
                 <div class="flex items-center gap-2">
                     <TbActivity class="h-6 w-6 text-primary"/>
                     <h1 class="text-2xl font-bold tracking-tight">AWS Deployer</h1>
                 </div>
 
-                {/* Desktop navigation - hidden on mobile */}
+                {/* Center: Filter input - grows to fill available space */}
+                <div class="flex-1 flex justify-center">
+                    <div class="relative group">
+                        <IoSearch class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground transition-colors group-focus-within:text-primary" />
+                        <input
+                            type="text"
+                            placeholder="Filter repos..."
+                            value={filterText()}
+                            onInput={(e) => setFilterText(e.currentTarget.value)}
+                            class="pl-9 pr-8 py-2 text-sm bg-card border border-border rounded-lg shadow-sm transition-all duration-200 ease-out w-56 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary hover:border-muted-foreground/30"
+                        />
+                        <Show when={filterText()}>
+                            <button
+                                onClick={() => setFilterText('')}
+                                class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                                aria-label="Clear filter"
+                            >
+                                <IoClose class="w-4 h-4" />
+                            </button>
+                        </Show>
+                    </div>
+                </div>
+
+                {/* Right: Desktop navigation - hidden on mobile */}
                 <nav class="desktop-nav flex items-center gap-4">
                     <A
                         href="/"
