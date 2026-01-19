@@ -35,6 +35,22 @@ func (r *Resolver) Redeploy(ctx context.Context, args struct{ BuildId string }) 
 		Str("new_sk", sk).
 		Msg("Triggering redeploy for build")
 
+	// Create a new build record for this redeploy with all fields from the original build
+	pk := builddao.NewPK(build.Repo, build.Env)
+	_, err = r.build.Create(ctx, builddao.CreateInput{
+		Repo:        build.Repo,
+		Env:         build.Env,
+		SK:          sk,
+		BuildNumber: build.BuildNumber,
+		Branch:      build.Branch,
+		Version:     build.Version,
+		CommitHash:  build.CommitHash,
+		StackName:   build.StackName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create build record for redeploy: %w", err)
+	}
+
 	// Construct Step Function input from build record
 	input := orchestrator.StepFunctionInput{
 		Repo:       build.Repo,
@@ -51,7 +67,6 @@ func (r *Resolver) Redeploy(ctx context.Context, args struct{ BuildId string }) 
 	executionArn, err := r.orchestrator.StartExecution(ctx, input)
 	if err != nil {
 		// Update build status to FAILED using the new SK
-		pk := builddao.NewPK(build.Repo, build.Env)
 		status := builddao.BuildStatusFailed
 		errorMsg := fmt.Sprintf("Failed to start step function: %v", err)
 		if updateErr := r.build.UpdateStatus(ctx, builddao.UpdateInput{
